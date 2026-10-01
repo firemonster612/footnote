@@ -1,0 +1,19 @@
+{
+  "name": "@footnote/shell-kit",
+  "private": true,
+  "type": "module",
+  "exports": {
+    "./realm": "./src/realm.ts",
+    "./host": "./src/host.ts"
+  },
+  "scripts": {
+    "typecheck": "tsc -p ."
+  },
+  "dependencies": {
+    "@footnote/core": "workspace:*",
+    "@footnote/powerpoint": "workspace:*"
+  },
+  "devDependencies": {
+    "@types/office-js": "^1.0.610"
+  }
+}

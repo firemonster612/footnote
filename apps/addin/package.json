@@ -2,7 +2,31 @@
   "name": "@footnote/addin",
   "private": true,
   "type": "module",
-  "scripts": { "dev": "vite", "build": "vite build", "typecheck": "tsc -p ." },
-  "dependencies": { "@footnote/core": "workspace:*", "@footnote/powerpoint": "workspace:*", "react": "^19.3.0", "react-dom": "^19.3.0" },
-  "devDependencies": { "vite": "^8.3.2", "@vitejs/plugin-react": "^6.1.1", "@tailwindcss/vite": "^4.3.3", "tailwindcss": "^4.3.3", "office-addin-dev-certs": "^3.0.1", "@types/office-js": "^1.0.610" }
+  "scripts": {
+    "dev": "vite",
+    "build": "vite build",
+    "preview": "vite preview",
+    "manifest": "bun scripts/manifest.ts",
+    "certs": "office-addin-dev-certs install",
+    "typecheck": "tsc -p ."
+  },
+  "dependencies": {
+    "@footnote/core": "workspace:*",
+    "@footnote/powerpoint": "workspace:*",
+    "@footnote/shell-kit": "workspace:*",
+    "react": "^19.3.0",
+    "react-dom": "^19.3.0"
+  },
+  "devDependencies": {
+    "@tailwindcss/vite": "^4.3.3",
+    "@types/node": "^22",
+    "@types/office-js": "^1.0.610",
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "@vitejs/plugin-basic-ssl": "^2.3.0",
+    "@vitejs/plugin-react": "^6.1.1",
+    "office-addin-dev-certs": "^3.0.1",
+    "tailwindcss": "^4.3.3",
+    "vite": "^8.3.2"
+  }
 }

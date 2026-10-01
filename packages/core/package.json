@@ -2,8 +2,16 @@
   "name": "@footnote/core",
   "private": true,
   "type": "module",
-  "exports": { ".": "./src/index.ts", "./contracts": "./src/contracts.ts", "./ui": "./src/ui/index.ts", "./styles.css": "./src/ui/styles.css" },
-  "scripts": { "typecheck": "tsc -p ." },
+  "exports": {
+    ".": "./src/index.ts",
+    "./contracts": "./src/contracts.ts",
+    "./ui": "./src/ui/index.ts",
+    "./styles.css": "./src/ui/styles.css"
+  },
+  "scripts": {
+    "typecheck": "tsc -p .",
+    "ui:dev": "vite --config ui-dev/vite.config.ts"
+  },
   "dependencies": {
     "@earendil-works/pi-agent-core": "1.0.0",
     "@earendil-works/pi-ai": "1.0.0",
@@ -16,5 +24,12 @@
     "xlsx": "^0.18.5",
     "jszip": "^3.10.2"
   },
-  "devDependencies": { "@types/react": "^19", "@types/react-dom": "^19", "tailwindcss": "^4.3.3" }
+  "devDependencies": {
+    "@types/react": "^19",
+    "@types/react-dom": "^19",
+    "tailwindcss": "^4.3.3",
+    "vite": "^8.3.2",
+    "@tailwindcss/vite": "^4.3.3",
+    "pptxgenjs": "^4.0.1"
+  }
 }

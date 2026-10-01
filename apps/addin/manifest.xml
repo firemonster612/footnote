@@ -1,0 +1,86 @@
+<?xml version="1.0" encoding="UTF-8"?>
+<!-- Points at https://localhost:3443. For another base URL: FOOTNOTE_ADDIN_URL=https://host:3443 bun run manifest -->
+<OfficeApp xmlns="http://schemas.microsoft.com/office/appforoffice/1.1"
+  xmlns:xsi="http://www.w3.org/2001/XMLSchema-instance"
+  xmlns:bt="http://schemas.microsoft.com/office/officeappbasictypes/1.0"
+  xmlns:ov="http://schemas.microsoft.com/office/taskpaneappversionoverrides"
+  xsi:type="TaskPaneApp">
+  <Id>f0a962be-235b-4fd1-96d2-5077ef17595e</Id>
+  <Version>1.0.0.0</Version>
+  <ProviderName>Footnote</ProviderName>
+  <DefaultLocale>en-US</DefaultLocale>
+  <DisplayName DefaultValue="Footnote"/>
+  <Description DefaultValue="Model-agnostic assistant that edits your presentation."/>
+  <IconUrl DefaultValue="https://localhost:3443/icon-32.png"/>
+  <HighResolutionIconUrl DefaultValue="https://localhost:3443/icon-64.png"/>
+  <SupportUrl DefaultValue="https://localhost:3443/index.html"/>
+  <AppDomains>
+    <AppDomain>https://localhost:3443</AppDomain>
+  </AppDomains>
+  <Hosts>
+    <Host Name="Presentation"/>
+    <!-- Later: <Host Name="Document"/> (Word), <Host Name="Workbook"/> (Excel) -->
+  </Hosts>
+  <DefaultSettings>
+    <SourceLocation DefaultValue="https://localhost:3443/index.html"/>
+  </DefaultSettings>
+  <Permissions>ReadWriteDocument</Permissions>
+  <VersionOverrides xmlns="http://schemas.microsoft.com/office/taskpaneappversionoverrides" xsi:type="VersionOverridesV1_0">
+    <Hosts>
+      <Host xsi:type="Presentation">
+        <DesktopFormFactor>
+          <GetStarted>
+            <Title resid="Footnote.Title"/>
+            <Description resid="Footnote.Tooltip"/>
+            <LearnMoreUrl resid="Taskpane.Url"/>
+          </GetStarted>
+          <ExtensionPoint xsi:type="PrimaryCommandSurface">
+            <OfficeTab id="TabHome">
+              <Group id="Footnote.Group">
+                <Label resid="Footnote.Title"/>
+                <Icon>
+                  <bt:Image size="16" resid="Icon.16"/>
+                  <bt:Image size="32" resid="Icon.32"/>
+                  <bt:Image size="80" resid="Icon.80"/>
+                </Icon>
+                <Control xsi:type="Button" id="Footnote.OpenPane">
+                  <Label resid="Footnote.Title"/>
+                  <Supertip>
+                    <Title resid="Footnote.Title"/>
+                    <Description resid="Footnote.Tooltip"/>
+                  </Supertip>
+                  <Icon>
+                    <bt:Image size="16" resid="Icon.16"/>
+                    <bt:Image size="32" resid="Icon.32"/>
+                    <bt:Image size="80" resid="Icon.80"/>
+                  </Icon>
+                  <Action xsi:type="ShowTaskpane">
+                    <TaskpaneId>Footnote.Taskpane</TaskpaneId>
+                    <SourceLocation resid="Taskpane.Url"/>
+                  </Action>
+                </Control>
+              </Group>
+            </OfficeTab>
+          </ExtensionPoint>
+        </DesktopFormFactor>
+      </Host>
+      <!-- Later: <Host xsi:type="Document"> (Word) and <Host xsi:type="Workbook"> (Excel) with the same button. -->
+    </Hosts>
+    <Resources>
+      <bt:Images>
+        <bt:Image id="Icon.16" DefaultValue="https://localhost:3443/icon-16.png"/>
+        <bt:Image id="Icon.32" DefaultValue="https://localhost:3443/icon-32.png"/>
+        <bt:Image id="Icon.80" DefaultValue="https://localhost:3443/icon-80.png"/>
+      </bt:Images>
+      <bt:Urls>
+        <bt:Url id="Taskpane.Url" DefaultValue="https://localhost:3443/index.html"/>
+      </bt:Urls>
+      <bt:ShortStrings>
+        <bt:String id="Footnote.Title" DefaultValue="Footnote"/>
+      </bt:ShortStrings>
+      <bt:LongStrings>
+        <bt:String id="Footnote.Tooltip" DefaultValue="Open Footnote to edit this presentation with an AI assistant."/>
+      </bt:LongStrings>
+    </Resources>
+  </VersionOverrides>
+</OfficeApp>

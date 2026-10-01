@@ -1,1 +1,1 @@
-export {};
+export { FootnoteRoot } from "./FootnoteRoot.tsx";

@@ -15,12 +15,17 @@
       "dependencies": {
         "@footnote/core": "workspace:*",
         "@footnote/powerpoint": "workspace:*",
+        "@footnote/shell-kit": "workspace:*",
         "react": "^19.3.0",
         "react-dom": "^19.3.0",
       },
       "devDependencies": {
         "@tailwindcss/vite": "^4.3.3",
+        "@types/node": "^22",
         "@types/office-js": "^1.0.610",
+        "@types/react": "^19",
+        "@types/react-dom": "^19",
+        "@vitejs/plugin-basic-ssl": "^2.3.0",
         "@vitejs/plugin-react": "^6.1.1",
         "office-addin-dev-certs": "^3.0.1",
         "tailwindcss": "^4.3.3",
@@ -29,9 +34,11 @@
     },
     "apps/extension": {
       "name": "@footnote/extension",
+      "version": "0.1.0",
       "dependencies": {
         "@footnote/core": "workspace:*",
         "@footnote/powerpoint": "workspace:*",
+        "@footnote/shell-kit": "workspace:*",
         "react": "^19.3.0",
         "react-dom": "^19.3.0",
       },
@@ -39,9 +46,21 @@
         "@tailwindcss/vite": "^4.3.3",
         "@types/chrome": "^0.3.4",
         "@types/office-js": "^1.0.610",
+        "@types/react": "^19",
+        "@types/react-dom": "^19",
         "@wxt-dev/module-react": "^1.2.2",
         "tailwindcss": "^4.3.3",
         "wxt": "^0.21.4",
+      },
+    },
+    "apps/shell-kit": {
+      "name": "@footnote/shell-kit",
+      "dependencies": {
+        "@footnote/core": "workspace:*",
+        "@footnote/powerpoint": "workspace:*",
+      },
+      "devDependencies": {
+        "@types/office-js": "^1.0.610",
       },
     },
     "packages/core": {
@@ -59,14 +78,18 @@
         "xlsx": "^0.18.5",
       },
       "devDependencies": {
+        "@tailwindcss/vite": "^4.3.3",
         "@types/react": "^19",
         "@types/react-dom": "^19",
+        "pptxgenjs": "^4.0.1",
         "tailwindcss": "^4.3.3",
+        "vite": "^8.3.2",
       },
     },
     "packages/powerpoint": {
       "name": "@footnote/powerpoint",
       "dependencies": {
+        "@earendil-works/pi-agent-core": "1.0.0",
         "@footnote/core": "workspace:*",
         "jszip": "^3.10.2",
         "pptxgenjs": "^4.0.1",
@@ -147,6 +170,8 @@
     "@footnote/extension": ["@footnote/extension@workspace:apps/extension"],
 
     "@footnote/powerpoint": ["@footnote/powerpoint@workspace:packages/powerpoint"],
+
+    "@footnote/shell-kit": ["@footnote/shell-kit@workspace:apps/shell-kit"],
 
     "@google/genai": ["@google/genai@2.21.0", "", { "dependencies": { "google-auth-library": "^10.3.0", "p-retry": "^4.6.2", "protobufjs": "^7.5.4", "ws": "^8.18.0" }, "peerDependencies": { "@modelcontextprotocol/sdk": "^1.25.2" }, "optionalPeers": ["@modelcontextprotocol/sdk"] }, "sha512-+PDtco2/Z0ONdzCGekCoCT+O1VJS9xJQNN4XzQpXG/t3El/SWWMkCWlFRO1KmivOHPa4Q0VjUYu1HBKCZ/v33Q=="],
 
@@ -421,6 +446,8 @@
     "@typescript/typescript-win32-arm64": ["@typescript/typescript-win32-arm64@7.0.2", "", { "os": "win32", "cpu": "arm64" }, "sha512-Gyl1Vy6OsWesLzmq+EP0Fb7b4Nid5232AvcA2SFcdYreldpNtYFFofPjnt62y9hQy7VTaZp65ICJjuAQRaVcIQ=="],
 
     "@typescript/typescript-win32-x64": ["@typescript/typescript-win32-x64@7.0.2", "", { "os": "win32", "cpu": "x64" }, "sha512-0BQ3HkAHHlKLSp1qRvf3SUhGpGsDuhB/jgFw75guyqbxJqEaS0Cw/VFO8i2nHglJUzQCRtMMR/IBAKE3ETMC4g=="],
+
+    "@vitejs/plugin-basic-ssl": ["@vitejs/plugin-basic-ssl@2.3.0", "", { "peerDependencies": { "vite": "^6.0.0 || ^7.0.0 || ^8.0.0" } }, "sha512-bdyo8rB3NnQbikdMpHaML9Z1OZPBu6fFOBo+OtxsBlvMJtysWskmBcnbIDhUqgC8tcxNv/a+BcV5U+2nQMm1OQ=="],
 
     "@vitejs/plugin-react": ["@vitejs/plugin-react@6.1.1", "", { "dependencies": { "@rolldown/pluginutils": "^1.0.1" }, "peerDependencies": { "@rolldown/plugin-babel": "^0.1.7 || ^0.2.0", "babel-plugin-react-compiler": "^1.0.0", "oxc-transform-react": "^0.145.0", "vite": "^8.0.0" }, "optionalPeers": ["@rolldown/plugin-babel", "babel-plugin-react-compiler", "oxc-transform-react"] }, "sha512-yxLaQV9gkhS8ezJqCM6+ndU7mDY6gqAg75NQ+0IjwEI8IYOmQCgkRwHKVSfWXW076DsqMo0Dk+0FK1U+M5RgFw=="],
 
