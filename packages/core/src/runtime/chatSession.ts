@@ -105,6 +105,7 @@ export function createChatSession({
   let model: Model<Api> | undefined;
   let error: string | undefined;
   let stagedIds: string[] = [];
+  let queued: { id: string; text: string; attachmentIds: string[] }[] = [];
   let contextTokens: number | undefined;
   let turnCount = 0;
   // Set between send() starting and the agent run starting, so a second send steers instead of racing.
@@ -172,7 +173,12 @@ export function createChatSession({
       permissionMode: permissions.state().mode,
       ...(modelId !== undefined && { modelId }),
       thinkingLevel,
-      stagedAttachments: attachments.list().filter((meta) => stagedIds.includes(meta.id)),
+      stagedAttachments: attachmentMetas(stagedIds),
+      queuedMessages: queued.map(({ id, text, attachmentIds }) => ({
+        id,
+        text,
+        attachments: attachmentMetas(attachmentIds),
+      })),
       canUndo: hostModule.undo.canUndo(chatId),
       ...(model &&
         contextTokens !== undefined && {
@@ -180,6 +186,10 @@ export function createChatSession({
         }),
       ...(pendingError !== undefined && { error: pendingError }),
     };
+  }
+
+  function attachmentMetas(ids: string[]) {
+    return attachments.list().filter((meta) => ids.includes(meta.id));
   }
 
   function notify() {
@@ -294,16 +304,40 @@ export function createChatSession({
     return { ...(context && { context }), ...(documentContext && { messages: [documentContext] }) };
   }
 
-  function takeUserMessage(text: string): UserMessage {
-    const attached = stagedIds.flatMap((id): (TextContent | ImageContent)[] => {
+  function takeStagedIds(): string[] {
+    const ids = stagedIds;
+    stagedIds = [];
+    return ids;
+  }
+
+  function userMessage(text: string, attachmentIds: string[]): UserMessage {
+    const attached = attachmentIds.flatMap((id): (TextContent | ImageContent)[] => {
       const attachment = attachments.get(id);
       return attachment ? attachmentToContent(attachment) : [];
     });
-    stagedIds = [];
     return { role: "user", content: [{ type: "text", text }, ...attached], timestamp: Date.now() };
   }
 
-  async function startRun(text: string) {
+  function isRunning(): boolean {
+    return agent.state.isStreaming || startingRun !== undefined;
+  }
+
+  /** A run that ended normally hands over to the next queued message; a stopped or failed run leaves the queue for the user. */
+  function sendNextQueued() {
+    const lastMessage = agent.state.messages.at(-1);
+    const endedNormally =
+      error === undefined &&
+      !(
+        lastMessage?.role === "assistant" &&
+        (lastMessage.stopReason === "aborted" || lastMessage.stopReason === "error")
+      );
+    const next = queued[0];
+    if (!endedNormally || !next || isRunning()) return;
+    queued = queued.slice(1);
+    void startRun(next.text, next.attachmentIds);
+  }
+
+  async function startRun(text: string, attachmentIds: string[] = takeStagedIds()) {
     const starting = new AbortController();
     startingRun = starting;
     error = undefined;
@@ -318,7 +352,7 @@ export function createChatSession({
       agent.state.tools = tools;
 
       hostModule.undo.beginTurn(chatId, crypto.randomUUID());
-      const userMessage = takeUserMessage(text);
+      const prompt = userMessage(text, attachmentIds);
       if (!agent.state.messages.some((message) => message.role === "user"))
         title = titleFrom(text) ?? title;
       const compacted = await compactIfNeeded(agent.state.messages, starting.signal);
@@ -326,13 +360,14 @@ export function createChatSession({
       const documentContext = await freshDocumentContext(agent.state.messages);
       if (starting.signal.aborted) return;
       startingRun = undefined;
-      await agent.prompt(documentContext ? [userMessage, documentContext] : [userMessage]);
+      await agent.prompt(documentContext ? [prompt, documentContext] : [prompt]);
     } catch (cause) {
       error = errorText(cause);
     } finally {
       startingRun = undefined;
       notify();
     }
+    sendNextQueued();
   }
 
   const session: ChatSession = {
@@ -342,19 +377,45 @@ export function createChatSession({
       return () => listeners.delete(listener);
     },
     send(text) {
-      if (agent.state.isStreaming || startingRun) {
-        session.steer(text);
+      if (isRunning()) {
+        session.queue(text);
         return Promise.resolve();
       }
       return startRun(text);
     },
     steer(text) {
-      if (!agent.state.isStreaming && !startingRun) {
-        void session.send(text);
+      if (!isRunning()) {
+        void startRun(text);
         return;
       }
-      agent.steer(takeUserMessage(text));
+      agent.steer(userMessage(text, takeStagedIds()));
       notify();
+    },
+    queue(text) {
+      if (!isRunning()) {
+        void startRun(text);
+        return;
+      }
+      queued = [...queued, { id: crypto.randomUUID(), text, attachmentIds: takeStagedIds() }];
+      notify();
+    },
+    removeQueued(id) {
+      const removed = queued.find((message) => message.id === id);
+      if (!removed) return;
+      queued = queued.filter((message) => message !== removed);
+      for (const attachmentId of removed.attachmentIds) attachments.remove(attachmentId);
+      notify();
+    },
+    steerQueued(id) {
+      const message = queued.find((candidate) => candidate.id === id);
+      if (!message) return;
+      queued = queued.filter((candidate) => candidate !== message);
+      if (isRunning()) {
+        agent.steer(userMessage(message.text, message.attachmentIds));
+        notify();
+      } else {
+        void startRun(message.text, message.attachmentIds);
+      }
     },
     abort() {
       // Aborting the run's signal also cancels pending approvals (see PermissionGate.check).

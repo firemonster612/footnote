@@ -231,6 +231,7 @@ class FakeChatSession implements ChatSession {
   }
 
   async send(text: string) {
+    if (this.state.isStreaming) return this.queue(text);
     const attachments = this.state.stagedAttachments.map(
       (attachment) =>
         ({
@@ -250,6 +251,40 @@ class FakeChatSession implements ChatSession {
 
   steer(text: string) {
     this.update({ messages: [...this.state.messages, userMessage([{ type: "text", text }])] });
+  }
+
+  queue(text: string) {
+    if (!this.state.isStreaming) return void this.send(text);
+    this.update({
+      queuedMessages: [
+        ...this.state.queuedMessages,
+        { id: crypto.randomUUID(), text, attachments: this.state.stagedAttachments },
+      ],
+      stagedAttachments: [],
+    });
+  }
+
+  removeQueued(id: string) {
+    this.update({
+      queuedMessages: this.state.queuedMessages.filter((message) => message.id !== id),
+    });
+  }
+
+  steerQueued(id: string) {
+    const message = this.state.queuedMessages.find((candidate) => candidate.id === id);
+    if (!message) return;
+    this.removeQueued(id);
+    if (this.state.isStreaming) this.steer(message.text);
+    else void this.send(message.text);
+  }
+
+  /** Mirrors the runtime: a finished run sends the oldest queued message. */
+  private finishRun(patch: Partial<ChatSessionState>) {
+    this.update({ ...patch, isStreaming: false });
+    const [next] = this.state.queuedMessages;
+    if (!next) return;
+    this.update({ queuedMessages: this.state.queuedMessages.slice(1) });
+    void this.send(next.text);
   }
 
   abort() {
@@ -370,12 +405,11 @@ class FakeChatSession implements ChatSession {
         });
       },
       () =>
-        this.update({
+        this.finishRun({
           messages: [
             ...this.state.messages,
             toolResult(call.id, call.name, [slideImage("Q3 revenue", "#0F766E")]),
           ],
-          isStreaming: false,
           canUndo: true,
           contextUsage: {
             tokens: (this.state.contextUsage?.tokens ?? 0) + 3_100,
@@ -398,6 +432,7 @@ function emptyState(id: string, settings: Settings): ChatSessionState {
     modelId: settings.modelId,
     thinkingLevel: settings.thinkingLevel,
     stagedAttachments: [],
+    queuedMessages: [],
     canUndo: false,
   };
 }
@@ -550,6 +585,14 @@ function demoState(): ChatSessionState {
     permissionMode: "ask",
     modelId: "claude-opus-5-5",
     thinkingLevel: "high",
+    queuedMessages: [
+      { id: "queued-1", text: "Then give slide 4 the same treatment", attachments: [] },
+      {
+        id: "queued-2",
+        text: "Also check the speaker notes on every slide for typos and tighten anything longer than three sentences",
+        attachments: [],
+      },
+    ],
     stagedAttachments: [
       {
         id: "att-2",

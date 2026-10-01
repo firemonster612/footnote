@@ -214,3 +214,91 @@ describe("chat session", () => {
     expect(session.getState().contextUsage!.tokens).toBeLessThan(23_000);
   });
 });
+
+async function untilIdle(session: ChatSession): Promise<void> {
+  for (let i = 0; i < 200; i += 1) {
+    const state = session.getState();
+    if (!state.isStreaming && state.queuedMessages.length === 0) return;
+    await new Promise((resolve) => setTimeout(resolve, 5));
+  }
+  throw new Error("session never went idle");
+}
+
+describe("queued messages", () => {
+  it("sends a message queued during a run as the next turn once the run finishes", async () => {
+    const harness = sessionHarness();
+    const requests: TranscriptContext[] = [];
+    let session!: ChatSession;
+    harness.faux.setResponses([
+      (context) => {
+        requests.push(context);
+        session.queue("Then shorten the title");
+        expect(session.getState().queuedMessages.map((message) => message.text)).toEqual([
+          "Then shorten the title",
+        ]);
+        return fauxAssistantMessage("First done.");
+      },
+      (context) => {
+        requests.push(context);
+        return fauxAssistantMessage("Second done.");
+      },
+    ]);
+    session = harness.open(newChatRecord());
+
+    await session.send("Tidy slide 2");
+    await untilIdle(session);
+
+    expect(requests).toHaveLength(2);
+    expect(JSON.stringify(requests[1]!.messages.at(-1))).toContain("Then shorten the title");
+    expect(harness.turns).toHaveLength(2);
+  });
+
+  it("steers the running task with a queued message instead of waiting for the run to end", async () => {
+    const harness = sessionHarness();
+    const requests: TranscriptContext[] = [];
+    let session!: ChatSession;
+    harness.faux.setResponses([
+      (context) => {
+        requests.push(context);
+        session.queue("Use teal instead");
+        session.steerQueued(session.getState().queuedMessages[0]!.id);
+        return fauxAssistantMessage("Working on it.");
+      },
+      (context) => {
+        requests.push(context);
+        return fauxAssistantMessage("Switched to teal.");
+      },
+    ]);
+    session = harness.open(newChatRecord());
+
+    await session.send("Recolor the deck");
+    await untilIdle(session);
+
+    expect(requests).toHaveLength(2);
+    expect(JSON.stringify(requests[1]!.messages)).toContain("Use teal instead");
+    // Steering continues the same run: one user turn, not a second one.
+    expect(harness.turns).toHaveLength(1);
+  });
+
+  it("keeps the queue when the user stops the run", async () => {
+    const harness = sessionHarness();
+    harness.faux.setResponses([
+      fauxAssistantMessage(fauxToolCall("add_slide", {})),
+      fauxAssistantMessage([], { stopReason: "aborted", errorMessage: "Request was aborted" }),
+    ]);
+    const session = harness.open(newChatRecord());
+    session.subscribe((state) => {
+      if (state.pendingApprovals.length > 0 && state.queuedMessages.length === 0) {
+        session.queue("Later");
+        session.abort();
+      }
+    });
+
+    await session.send("Add a slide");
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const state = session.getState();
+    expect(state.isStreaming).toBe(false);
+    expect(state.queuedMessages.map((message) => message.text)).toEqual(["Later"]);
+  });
+});

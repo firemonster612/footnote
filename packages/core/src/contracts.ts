@@ -87,7 +87,10 @@ export function describeOfficeError(info: OfficeErrorInfo): string {
 /** Drives permissions. read: never asks. web: never asks. write: asks in Ask mode. code: always asks in Ask mode. */
 export type ToolAccess = "read" | "write" | "code" | "web";
 
-export type FootnoteTool<TParameters extends TSchema = TSchema, TDetails = any> = AgentTool<TParameters, TDetails> & {
+export type FootnoteTool<TParameters extends TSchema = TSchema, TDetails = any> = AgentTool<
+  TParameters,
+  TDetails
+> & {
   access: ToolAccess;
   /** One-line, user-facing description of a specific call, shown in approval prompts and tool cards. */
   describeCall?: (args: any) => string;
@@ -238,6 +241,13 @@ export interface ChatSummary {
   updatedAt: number;
 }
 
+export interface QueuedMessage {
+  id: string;
+  text: string;
+  /** Attachments that were staged when the message was queued; they go with it. */
+  attachments: AttachmentMeta[];
+}
+
 export interface ChatSessionState {
   id: string;
   title: string;
@@ -251,6 +261,8 @@ export interface ChatSessionState {
   thinkingLevel: ThinkingLevel;
   /** Attachments staged for the next message. */
   stagedAttachments: AttachmentMeta[];
+  /** Messages waiting for the current run to finish, oldest first. Sent one per run. */
+  queuedMessages: QueuedMessage[];
   canUndo: boolean;
   contextUsage?: { tokens: number; window: number };
   error?: string;
@@ -259,9 +271,15 @@ export interface ChatSessionState {
 export interface ChatSession {
   getState(): ChatSessionState;
   subscribe(listener: (state: ChatSessionState) => void): () => void;
+  /** Starts a run, or queues the message when one is already running. */
   send(text: string): Promise<void>;
   /** Injects a message while the agent is working (delivered after the current tool batch). */
   steer(text: string): void;
+  /** Queues a message (with the staged attachments) to send when the current run finishes. */
+  queue(text: string): void;
+  removeQueued(id: string): void;
+  /** Steers the running task with a queued message now, or sends it right away when nothing is running. */
+  steerQueued(id: string): void;
   abort(): void;
   resolveApproval(approvalId: string, decision: ApprovalDecision): void;
   setPermissionMode(mode: PermissionMode): void;

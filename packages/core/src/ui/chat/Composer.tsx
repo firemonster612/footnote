@@ -1,5 +1,6 @@
 import {
   ArrowUp,
+  CornerDownRight,
   FileText,
   Paperclip,
   ShieldCheck,
@@ -10,8 +11,15 @@ import {
   type LucideIcon,
 } from "lucide-react";
 import { useRef, useState } from "react";
-import type { ChatSession, ChatSessionState, ModelInfo, PermissionMode } from "../../contracts.ts";
+import type {
+  ChatSession,
+  ChatSessionState,
+  ModelInfo,
+  PermissionMode,
+  QueuedMessage,
+} from "../../contracts.ts";
 import { Badge } from "../components/badge.tsx";
+import { Button } from "../components/button.tsx";
 import { IconButton } from "../components/icon-button.tsx";
 import {
   Select,
@@ -44,12 +52,13 @@ export function Composer({
   const fileInputRef = useRef<HTMLInputElement>(null);
   const currentModel = models.find((model) => model.id === state.modelId);
   const thinkingLevels = currentModel?.thinkingLevels ?? [state.thinkingLevel];
-  const canSend = text.trim() !== "" || (!state.isStreaming && state.stagedAttachments.length > 0);
+  const canSend = text.trim() !== "" || state.stagedAttachments.length > 0;
 
   function submit() {
     if (!canSend) return;
     const message = text.trim();
-    if (state.isStreaming) session.steer(message);
+    // While a run is going, Enter queues; a queued message's Steer button injects it now.
+    if (state.isStreaming) session.queue(message);
     else session.send(message).catch(onSendError);
     setText("");
   }
@@ -89,119 +98,180 @@ export function Composer({
           ))}
         </div>
       )}
-      <div className="flex flex-col rounded-lg border border-input bg-background shadow-control transition-[border-color,box-shadow] duration-100 hover:border-input-hover has-[textarea:focus]:border-ring has-[textarea:focus]:ring-2 has-[textarea:focus]:ring-ring/20">
-        <textarea
-          value={text}
-          onChange={(event) => setText(event.target.value)}
-          onKeyDown={(event) => {
-            if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
-            event.preventDefault();
-            submit();
-          }}
-          onPaste={(event) => {
-            const files = [...event.clipboardData.files];
-            if (files.length === 0) return;
-            event.preventDefault();
-            onFiles(files);
-          }}
-          rows={2}
-          placeholder={state.isStreaming ? "Add to the current task" : "Ask Footnote"}
-          aria-label="Message"
-          className="max-h-48 min-h-12 resize-none bg-transparent px-2.5 pt-2 pb-1 outline-none [field-sizing:content] placeholder:text-subtle-foreground focus-visible:outline-none"
-        />
-        <div className="flex items-center gap-0.5 px-1 pb-1">
-          <IconButton
-            icon={Paperclip}
-            label="Attach files"
-            onClick={() => fileInputRef.current?.click()}
+      <div className="flex flex-col">
+        {state.queuedMessages.length > 0 && (
+          <QueueBar messages={state.queuedMessages} running={state.isStreaming} session={session} />
+        )}
+        <div className="flex flex-col rounded-lg border border-input bg-background shadow-control transition-[border-color,box-shadow] duration-100 hover:border-input-hover has-[textarea:focus]:border-ring has-[textarea:focus]:ring-2 has-[textarea:focus]:ring-ring/20">
+          <textarea
+            value={text}
+            onChange={(event) => setText(event.target.value)}
+            onKeyDown={(event) => {
+              if (event.key !== "Enter" || event.shiftKey || event.nativeEvent.isComposing) return;
+              event.preventDefault();
+              submit();
+            }}
+            onPaste={(event) => {
+              const files = [...event.clipboardData.files];
+              if (files.length === 0) return;
+              event.preventDefault();
+              onFiles(files);
+            }}
+            rows={2}
+            placeholder={state.isStreaming ? "Queue a message" : "Ask Footnote"}
+            aria-label="Message"
+            className="max-h-48 min-h-12 resize-none bg-transparent px-2.5 pt-2 pb-1 outline-none [field-sizing:content] placeholder:text-subtle-foreground focus-visible:outline-none"
           />
-          <input
-            ref={fileInputRef}
-            type="file"
-            multiple
-            hidden
-            onChange={(event) => {
-              onFiles([...(event.target.files ?? [])]);
-              event.target.value = "";
-            }}
-          />
-          <Select
-            value={state.modelId ?? ""}
-            onValueChange={changeModel}
-            disabled={models.length === 0}
-          >
-            <SelectTrigger variant="ghost" aria-label="Model" className="max-w-40">
-              <SelectValue placeholder="No model" />
-            </SelectTrigger>
-            <SelectContent>
-              {state.modelId && !currentModel && (
-                <SelectItem value={state.modelId}>{state.modelId}</SelectItem>
-              )}
-              {models.map((model) => (
-                <SelectItem key={model.id} value={model.id}>
-                  {model.id}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <Select
-            value={state.thinkingLevel}
-            onValueChange={(value) => {
-              const level = thinkingLevels.find((candidate) => candidate === value);
-              if (level) session.setThinkingLevel(level);
-            }}
-          >
-            <SelectTrigger variant="ghost" aria-label="Thinking effort" className="shrink-0">
-              <SelectValue />
-            </SelectTrigger>
-            <SelectContent>
-              {thinkingLevels.map((level) => (
-                <SelectItem key={level} value={level}>
-                  {thinkingLevelLabels[level]}
-                </SelectItem>
-              ))}
-            </SelectContent>
-          </Select>
-          <ToggleGroup
-            type="single"
-            aria-label="Permissions"
-            value={state.permissionMode}
-            onValueChange={(mode) => {
-              if (mode === "ask" || mode === "full") session.setPermissionMode(mode);
-            }}
-            className="ml-0.5"
-          >
-            {permissionModes.map(({ mode, icon: Icon, label, className }) => (
-              <Tooltip key={mode}>
-                <TooltipTrigger asChild>
-                  <ToggleGroupItem value={mode} aria-label={label} className={className}>
-                    <Icon size={14} />
-                  </ToggleGroupItem>
-                </TooltipTrigger>
-                <TooltipContent>{label}</TooltipContent>
-              </Tooltip>
-            ))}
-          </ToggleGroup>
-          {state.canUndo && !state.isStreaming && (
-            <IconButton icon={Undo2} label="Undo last turn" onClick={onUndo} />
-          )}
-          <span className="flex-1" />
-          {state.contextUsage && <ContextUsage {...state.contextUsage} />}
-          {state.isStreaming && (
-            <IconButton icon={Square} label="Stop" onClick={() => session.abort()} />
-          )}
-          {(!state.isStreaming || canSend) && (
+          <div className="flex items-center gap-0.5 px-1 pb-1">
             <IconButton
-              icon={ArrowUp}
-              label={state.isStreaming ? "Send to the running task" : "Send"}
-              variant="primary"
-              onClick={submit}
-              disabled={!canSend}
+              icon={Paperclip}
+              label="Attach files"
+              onClick={() => fileInputRef.current?.click()}
             />
-          )}
+            <input
+              ref={fileInputRef}
+              type="file"
+              multiple
+              hidden
+              onChange={(event) => {
+                onFiles([...(event.target.files ?? [])]);
+                event.target.value = "";
+              }}
+            />
+            <Select
+              value={state.modelId ?? ""}
+              onValueChange={changeModel}
+              disabled={models.length === 0}
+            >
+              <SelectTrigger variant="ghost" aria-label="Model" className="max-w-40">
+                <SelectValue placeholder="No model" />
+              </SelectTrigger>
+              <SelectContent>
+                {state.modelId && !currentModel && (
+                  <SelectItem value={state.modelId}>{state.modelId}</SelectItem>
+                )}
+                {models.map((model) => (
+                  <SelectItem key={model.id} value={model.id}>
+                    {model.id}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <Select
+              value={state.thinkingLevel}
+              onValueChange={(value) => {
+                const level = thinkingLevels.find((candidate) => candidate === value);
+                if (level) session.setThinkingLevel(level);
+              }}
+            >
+              <SelectTrigger variant="ghost" aria-label="Thinking effort" className="shrink-0">
+                <SelectValue />
+              </SelectTrigger>
+              <SelectContent>
+                {thinkingLevels.map((level) => (
+                  <SelectItem key={level} value={level}>
+                    {thinkingLevelLabels[level]}
+                  </SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+            <ToggleGroup
+              type="single"
+              aria-label="Permissions"
+              value={state.permissionMode}
+              onValueChange={(mode) => {
+                if (mode === "ask" || mode === "full") session.setPermissionMode(mode);
+              }}
+              className="ml-0.5"
+            >
+              {permissionModes.map(({ mode, icon: Icon, label, className }) => (
+                <Tooltip key={mode}>
+                  <TooltipTrigger asChild>
+                    <ToggleGroupItem value={mode} aria-label={label} className={className}>
+                      <Icon size={14} />
+                    </ToggleGroupItem>
+                  </TooltipTrigger>
+                  <TooltipContent>{label}</TooltipContent>
+                </Tooltip>
+              ))}
+            </ToggleGroup>
+            {state.canUndo && !state.isStreaming && (
+              <IconButton icon={Undo2} label="Undo last turn" onClick={onUndo} />
+            )}
+            <span className="flex-1" />
+            {state.contextUsage && <ContextUsage {...state.contextUsage} />}
+            {state.isStreaming && (
+              <IconButton icon={Square} label="Stop" onClick={() => session.abort()} />
+            )}
+            {(!state.isStreaming || canSend) && (
+              <IconButton
+                icon={ArrowUp}
+                label={state.isStreaming ? "Queue message" : "Send"}
+                variant="primary"
+                onClick={submit}
+                disabled={!canSend}
+              />
+            )}
+          </div>
         </div>
       </div>
     </div>
+  );
+}
+
+/** Queued messages, drawn as a tab attached to the composer's top edge. */
+function QueueBar({
+  messages,
+  running,
+  session,
+}: {
+  messages: QueuedMessage[];
+  running: boolean;
+  session: ChatSession;
+}) {
+  return (
+    <ol
+      aria-label="Queued messages"
+      className="mx-2 flex max-h-32 flex-col overflow-y-auto rounded-t-md border border-b-0 border-input bg-muted/60 py-0.5"
+    >
+      {messages.map((message, index) => (
+        <li key={message.id} className="flex items-center gap-1.5 py-0.5 pr-0.5 pl-2 text-small">
+          <CornerDownRight size={12} aria-hidden className="shrink-0 text-subtle-foreground" />
+          <span className="min-w-0 flex-1 truncate" title={message.text}>
+            {message.text || "(attachments only)"}
+          </span>
+          {message.attachments.length > 0 && (
+            <span className="shrink-0 text-caption text-subtle-foreground">
+              +{message.attachments.length} file{message.attachments.length === 1 ? "" : "s"}
+            </span>
+          )}
+          <Tooltip>
+            <TooltipTrigger asChild>
+              <Button
+                variant="ghost"
+                className="h-6 shrink-0 px-2"
+                onClick={() => session.steerQueued(message.id)}
+              >
+                {running ? "Steer" : "Send"}
+              </Button>
+            </TooltipTrigger>
+            <TooltipContent>
+              {running
+                ? "Send now: Footnote reads it after its current step"
+                : index === 0
+                  ? "Send now"
+                  : "Send now, ahead of the others"}
+            </TooltipContent>
+          </Tooltip>
+          <IconButton
+            icon={X}
+            label="Remove from queue"
+            onClick={() => session.removeQueued(message.id)}
+            className="size-6 [&_svg]:size-3"
+          />
+        </li>
+      ))}
+    </ol>
   );
 }
 
