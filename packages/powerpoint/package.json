@@ -1,0 +1,14 @@
+{
+  "name": "@footnote/powerpoint",
+  "private": true,
+  "type": "module",
+  "exports": { ".": "./src/index.ts", "./ops": "./src/ops/index.ts" },
+  "scripts": { "typecheck": "tsc -p ." },
+  "dependencies": {
+    "@footnote/core": "workspace:*",
+    "typebox": "^1.3.34",
+    "pptxgenjs": "^4.0.1",
+    "jszip": "^3.10.2"
+  },
+  "devDependencies": { "@types/office-js": "^1.0.610" }
+}
