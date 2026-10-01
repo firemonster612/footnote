@@ -1,4 +1,9 @@
-import type { CodeRunResult, FootnoteTool, ToolEnv } from "@footnote/core/contracts";
+import {
+  describeOfficeError,
+  type CodeRunResult,
+  type FootnoteTool,
+  type ToolEnv,
+} from "@footnote/core/contracts";
 import { Type } from "typebox";
 import { codeHelpersReference } from "../advanced/index.ts";
 import type { WriteGuard } from "../writeGuard.ts";
@@ -24,8 +29,10 @@ export function formatCodeRun(run: CodeRunResult): string {
     );
   }
   if (!run.ok) {
-    const code = run.error?.code ? ` [${run.error.code}]` : "";
-    return clip(`Error${code}: ${run.error?.message ?? "unknown error"}${logs}`);
+    const detail = run.error ? describeOfficeError(run.error) : "unknown error";
+    return clip(
+      `Error: ${detail}${logs}\nEdits synced before the failure stay applied. Check the slide with get_slide before rerunning.`,
+    );
   }
   const result = run.result === undefined ? "undefined" : JSON.stringify(run.result);
   return clip(`Result: ${result}${logs}`);
@@ -43,6 +50,14 @@ Load before reading (\`.load("…")\` then \`await context.sync()\`), sync after
 Results over ${MAX_RESULT_CHARS} characters are cut. PowerPoint for the web applies big batches slowly: \`await context.sync()\` after each slide's edits rather than once at the end, and keep one run to a few slides. \
 List the slides the code will change in slideIds so undo can restore them. If the outcome is unknown, re-read before retrying.
 
+PowerPoint for the web rules (breaking them fails the run):
+- Batches aren't transactional: when a sync fails, everything queued before the failing statement may already be applied. After an error, read the slide (get_slide) before running again, and make scripts safe to rerun (prefixed shape names + \`footnote.removeShapes\`).
+- Never swallow sync errors (\`.catch(() => {})\`); a failed sync leaves the loaded values unusable and the next statements fail confusingly.
+- Only GeometricShape, TextBox and Placeholder shapes have a \`textFrame\`. Load \`type\` first or use \`footnote.textShapes\`; touching \`textFrame\` on a line, picture, group or table fails the sync.
+- Don't use a shape after \`delete()\`, and don't \`getItem\` an ID you haven't just loaded; IDs are strings scoped to their slide and change when a slide is re-inserted.
+- Use string enum values ("Ellipse", "SendToBack", "Center"). Colors are "#RRGGBB"; \`fill.transparency\` is 0–1.
+- There is no API for blur, gradients, shadows or glow; draw them with \`footnote.canvasImage\` and an image fill, or say it isn't possible.
+
 ${codeHelpersReference}`,
     parameters: Type.Object({
       code: Type.String({
@@ -59,7 +74,10 @@ ${codeHelpersReference}`,
     describeCall: (args: { explanation: string }) => args.explanation,
     async execute(_id, { code, slideIds = [] }, signal) {
       if (slideIds.length > 0) await guard.checkpoint(slideIds);
-      const run = await env.host.runCode(code, { timeoutMs: CODE_TIMEOUT_MS, ...(signal && { signal }) });
+      const run = await env.host.runCode(code, {
+        timeoutMs: CODE_TIMEOUT_MS,
+        ...(signal && { signal }),
+      });
       return {
         content: [{ type: "text", text: formatCodeRun(run) }],
         details: run,

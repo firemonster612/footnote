@@ -45,8 +45,18 @@ describe("formatCodeRun", () => {
 
   it("returns the JSON result and error codes", () => {
     expect(formatCodeRun({ ok: true, result: { count: 3 }, logs: [] })).toBe('Result: {"count":3}');
-    expect(
-      formatCodeRun({ ok: false, logs: [], error: { message: "bad", code: "InvalidArgument" } }),
-    ).toBe("Error [InvalidArgument]: bad");
+    const text = formatCodeRun({
+      ok: false,
+      logs: [],
+      error: {
+        message: "InvalidParam passed to GetItem(id)",
+        code: "InvalidArgument",
+        debugInfo: { errorLocation: "ShapeCollection.getItem" },
+      },
+    });
+    expect(text).toContain(
+      "Error: InvalidParam passed to GetItem(id) (code InvalidArgument; at ShapeCollection.getItem)",
+    );
+    expect(text).toContain("Edits synced before the failure stay applied");
   });
 });

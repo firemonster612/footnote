@@ -80,18 +80,34 @@ describe("tool result budget", () => {
 });
 
 describe("messages sent to the model", () => {
-  it("keeps images only in the newest image-bearing messages", () => {
-    const messages = [1, 2, 3, 4].map((n) =>
-      toolResult([{ type: "text", text: `render ${n}` }, image]),
-    );
-    const sent = toLlmMessages(messages, 3);
+  it("keeps every image from the current turn and only the newest earlier ones", () => {
+    const renders = (count: number) =>
+      Array.from({ length: count }, (_, n) =>
+        toolResult([{ type: "text", text: `render ${n}` }, image]),
+      );
+    const userMessage = {
+      role: "user",
+      content: [{ type: "text", text: "next" }],
+      timestamp: 1,
+    } as AgentMessage;
+    const sent = toLlmMessages([...renders(4), userMessage, ...renders(4)], 3);
     const imageCounts = sent.map((message) =>
       typeof message.content === "string" || message.role === "system"
         ? 0
         : message.content.filter((block) => block.type === "image").length,
     );
-    expect(imageCounts).toEqual([0, 1, 1, 1]);
-    expect(JSON.stringify(sent[0])).toContain("Image omitted");
+    expect(imageCounts).toEqual([0, 1, 1, 1, 0, 1, 1, 1, 1]);
+    expect(JSON.stringify(sent[0])).toContain("Earlier image removed");
+  });
+
+  it("drops all images for models without image input", () => {
+    const userMessage = {
+      role: "user",
+      content: [{ type: "text", text: "go" }],
+      timestamp: 1,
+    } as AgentMessage;
+    const sent = toLlmMessages([userMessage, toolResult([image])], 0);
+    expect(JSON.stringify(sent)).not.toContain('"type":"image"');
   });
 
   it("sends document state and compaction summaries as user text", () => {

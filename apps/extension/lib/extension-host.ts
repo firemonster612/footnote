@@ -26,6 +26,8 @@ import {
 } from "./protocol.ts";
 
 const INFO_TIMEOUT_MS = 5_000;
+const RECONNECT_WAIT_MS = 8_000;
+const RECONNECT_POLL_MS = 1_000;
 const USER_SCRIPTS_OFF =
   'Running code needs Chrome\'s user scripts permission (Chrome 135 or later). Open chrome://extensions, choose Details on Footnote, turn on "Allow User Scripts", then try again.';
 
@@ -145,8 +147,15 @@ export function createExtensionHost(kind: OfficeHostKind): OfficeHost {
     }
   }
 
-  function activeConnection(): Connection {
-    if (!connection || !status.connected) throw new Error(status.reason ?? notFoundReason);
+  /** The add-in frame drops its port for a moment when the pane reloads; wait for it instead of failing the tool call. */
+  async function activeConnection(): Promise<Connection> {
+    const deadline = Date.now() + RECONNECT_WAIT_MS;
+    while (!connection || !status.connected) {
+      if (Date.now() >= deadline) throw new Error(status.reason ?? notFoundReason);
+      await refresh();
+      if (connection && status.connected) break;
+      await new Promise((resolve) => setTimeout(resolve, RECONNECT_POLL_MS));
+    }
     return connection;
   }
 
@@ -168,12 +177,16 @@ export function createExtensionHost(kind: OfficeHostKind): OfficeHost {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
-    call(op, args, options) {
-      return request(activeConnection(), op, args, options);
+    async call(op, args, options) {
+      return request(await activeConnection(), op, args, options);
     },
     async runCode(code, options): Promise<CodeRunResult> {
-      const target = connection;
-      if (!target || !status.connected) return codeFailure(status.reason ?? notFoundReason);
+      let target: Connection;
+      try {
+        target = await activeConnection();
+      } catch (error) {
+        return codeFailure(errorMessage(error));
+      }
       if (!chrome.userScripts?.execute) return codeFailure(USER_SCRIPTS_OFF);
       try {
         const execution = chrome.userScripts.execute<CodeRunResult>({

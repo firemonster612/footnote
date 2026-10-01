@@ -27,6 +27,17 @@ export interface ShapeSummary {
 
 const round = (n: number) => Math.round(n * 10) / 10;
 
+/** Shape types that have a text frame before PowerPointApi 1.10 added getTextFrameOrNullObject. */
+const TEXT_SHAPE_TYPES = new Set(["GeometricShape", "TextBox", "Placeholder"]);
+
+export interface TextShape {
+  shape: PowerPoint.Shape;
+  id: string;
+  name: string;
+  type: string;
+  text: string;
+}
+
 export function createFootnoteHelpers(context: PowerPoint.RequestContext) {
   const slides = context.presentation.slides;
 
@@ -86,6 +97,54 @@ export function createFootnoteHelpers(context: PowerPoint.RequestContext) {
       return text === undefined ? summary : { ...summary, text };
     },
 
+    /** Shapes on a slide that have a text frame, with their text loaded. Loading text on lines, pictures or groups fails the whole sync. */
+    async textShapes(target: PowerPoint.Slide): Promise<TextShape[]> {
+      target.shapes.load("items/id,items/name,items/type");
+      await context.sync();
+      const candidates = target.shapes.items.filter((shape) => TEXT_SHAPE_TYPES.has(shape.type));
+      const ranges = candidates.map((shape) => {
+        const range = shape.textFrame.textRange;
+        range.load("text");
+        return range;
+      });
+      await context.sync();
+      return candidates.map((shape, i) => ({
+        shape,
+        id: shape.id,
+        name: shape.name,
+        type: shape.type,
+        text: ranges[i]!.text,
+      }));
+    },
+
+    /** Deletes shapes whose name starts with `namePrefix` and syncs. Run it before re-adding generated shapes so a rerun doesn't duplicate them. */
+    async removeShapes(target: PowerPoint.Slide, namePrefix: string): Promise<number> {
+      target.shapes.load("items/name");
+      await context.sync();
+      const matches = target.shapes.items.filter((shape) => shape.name.startsWith(namePrefix));
+      for (const shape of matches) shape.delete();
+      await context.sync();
+      return matches.length;
+    },
+
+    /** Draws on a canvas and returns base64 PNG for \`shape.fill.setImage(base64)\`: the way to get blur, gradients, glows and shadows, which Office.js can't set. */
+    async canvasImage(
+      width: number,
+      height: number,
+      draw: (ctx: OffscreenCanvasRenderingContext2D) => void,
+    ): Promise<string> {
+      const canvas = new OffscreenCanvas(width, height);
+      const ctx = canvas.getContext("2d");
+      if (!ctx) throw new Error("Canvas 2D isn't available here.");
+      draw(ctx);
+      const blob = await canvas.convertToBlob({ type: "image/png" });
+      const bytes = new Uint8Array(await blob.arrayBuffer());
+      let binary = "";
+      for (let i = 0; i < bytes.length; i += 0x8000)
+        binary += String.fromCharCode(...bytes.subarray(i, i + 0x8000));
+      return btoa(binary);
+    },
+
     /** JSON-safe copy (Office objects serialize their loaded properties). */
     json(value: unknown): unknown {
       return value === undefined ? null : JSON.parse(JSON.stringify(value));
@@ -123,4 +182,7 @@ export const codeHelpersReference = `\`footnote\` helpers (units are points; sli
 - \`footnote.setText(shape, text, { font, size, color: "#RRGGBB", bold, italic, align: "Left"|"Center"|"Right"|"Justify" }?)\` queues text + formatting; call \`await context.sync()\` after.
 - \`footnote.fit(shape)\` queues word wrap + shrink-text-on-overflow.
 - \`await footnote.readShape(shape)\` → { id, name, type, left, top, width, height, text? } (syncs).
+- \`await footnote.textShapes(slide)\` → [{ shape, id, name, type, text }] for shapes that have text. Use it instead of loading \`textFrame\` on every shape.
+- \`await footnote.removeShapes(slide, "fn-glow")\` → count deleted (syncs). Name generated shapes with a prefix and remove them first so reruns don't duplicate.
+- \`await footnote.canvasImage(w, h, ctx => { ctx.filter = "blur(40px)"; … })\` → base64 PNG; apply with \`shape.fill.setImage(png)\` on a rectangle. Use it for blur, gradients, glows and shadows.
 - \`footnote.json(value)\` → JSON-safe copy of loaded Office objects for the return value.`;

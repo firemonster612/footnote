@@ -26,30 +26,40 @@ export function documentContextMessage(text: string): DocumentContextMessage {
   return { role: "documentContext", text, timestamp: Date.now() };
 }
 
-/** How many image-bearing messages keep their images in what the model sees. */
+/** How many image-bearing messages from earlier turns keep their images; the current turn always keeps its own. */
 export const recentImageMessages = 3;
 
 const imagePlaceholder: TextContent = {
   type: "text",
-  text: "[Image omitted: only the newest images are kept in context, and none for models without image input.]",
+  text: "[Earlier image removed to save context. Render or read it again if you need to see it.]",
 };
 
 /**
- * Converts the transcript to provider messages: custom messages become user text, and images survive only in the
- * newest `keepImageMessages` user/tool-result messages that carry any.
+ * Converts the transcript to provider messages: custom messages become user text. Images from the current turn
+ * (since the last user message) always survive, so a model that renders several slides sees all of them; images
+ * from earlier turns survive only in the newest `keepImageMessages` messages that carry any. 0 drops every image,
+ * for models without image input.
  */
 export function toLlmMessages(messages: AgentMessage[], keepImageMessages: number): Message[] {
-  let imageMessagesSeen = 0;
+  const currentTurnStart = messages.findLastIndex((message) => message.role === "user");
+  let earlierImageMessagesSeen = 0;
   const converted: Message[] = [];
-  for (const message of messages.toReversed()) {
+  for (let index = messages.length - 1; index >= 0; index -= 1) {
+    const message = messages[index]!;
     const llmMessage = withSendableImages(toLlmMessage(message));
-    if (
+    const carriesImages =
       (llmMessage.role === "user" || llmMessage.role === "toolResult") &&
-      hasImages(llmMessage.content)
-    ) {
-      imageMessagesSeen += 1;
-      if (imageMessagesSeen > keepImageMessages) {
-        converted.push({ ...llmMessage, content: withoutImages(llmMessage.content) });
+      hasImages(llmMessage.content);
+    if (carriesImages) {
+      const inCurrentTurn = index >= currentTurnStart;
+      if (!inCurrentTurn) earlierImageMessagesSeen += 1;
+      const keep =
+        keepImageMessages > 0 && (inCurrentTurn || earlierImageMessagesSeen <= keepImageMessages);
+      if (!keep) {
+        converted.push({
+          ...llmMessage,
+          content: withoutImages(llmMessage.content as (TextContent | ImageContent)[]),
+        });
         continue;
       }
     }
