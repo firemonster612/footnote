@@ -1,4 +1,5 @@
-// OfficeHost for the side panel: finds the bridge frame in the active tab and talks to it through the relay.
+// OfficeHost for the engine, bound to one tab: finds the bridge frame there and talks to it through the relay.
+// The tab stays fixed whichever tab is active, so a running chat keeps talking to the document it started on.
 
 import type {
   CodeRunResult,
@@ -9,6 +10,7 @@ import type {
 } from "@footnote/core";
 import {
   hostNames,
+  logOpTiming,
   statusFromInfo,
   unknownOutcome,
   unwrapOpResponse,
@@ -16,7 +18,6 @@ import {
 } from "@footnote/shell-kit/host";
 import { codeBodySource, type OfficeInfo, type OpResponse } from "@footnote/shell-kit/realm";
 import {
-  BRIDGE_ATTRIBUTE,
   BRIDGE_READY_MESSAGE,
   INFO_OP,
   PORT_NAME,
@@ -24,57 +25,74 @@ import {
   type BridgeRequest,
   type BridgeResponse,
 } from "./protocol.ts";
+import { askWorker } from "./worker.ts";
 
 const INFO_TIMEOUT_MS = 5_000;
+const CONNECT_TIMEOUT_MS = 5_000;
 const RECONNECT_WAIT_MS = 8_000;
 const RECONNECT_POLL_MS = 1_000;
 const USER_SCRIPTS_OFF =
   'Running code needs Chrome\'s user scripts permission (Chrome 135 or later). Open chrome://extensions, choose Details on Footnote, turn on "Allow User Scripts", then try again.';
 
 interface BridgeFrame {
-  tabId: number;
   tabUrl?: string;
   frameId: number;
 }
 
-interface Connection extends BridgeFrame {
+interface Connection {
+  frameId: number;
   port: chrome.runtime.Port;
   pending: Map<string, (response: OpResponse) => void>;
 }
 
-export function createExtensionHost(kind: OfficeHostKind): OfficeHost {
+export function createExtensionHost(kind: OfficeHostKind, tabId: number): OfficeHost {
   const notFoundReason = `Open the Claude add-in in ${hostNames[kind]} to connect.`;
   const notFound: OfficeHostStatus = { connected: false, reason: notFoundReason };
   let status = notFound;
   let connection: Connection | undefined;
   let latestRefresh = 0;
   const listeners = new Set<(status: OfficeHostStatus) => void>();
+  const connectionListeners = new Set<(opened: Connection) => void>();
 
   function setStatus(next: OfficeHostStatus): void {
     status = next;
     for (const listener of listeners) listener(next);
   }
 
-  /** Finds a frame in the active tab where the bridge is ready, preferring one running the expected Office host. */
+  /** Finds a frame in the tab where the bridge is ready, preferring one running the expected Office host. */
   async function findBridgeFrame(): Promise<BridgeFrame | undefined> {
-    const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
-    if (tab?.id === undefined) return undefined;
-    const frames = await chrome.scripting
-      .executeScript({
-        target: { tabId: tab.id, allFrames: true },
-        func: (attribute: string) => document.documentElement.getAttribute(attribute),
-        args: [BRIDGE_ATTRIBUTE],
-      })
-      // Pages we can't script (chrome://, the Web Store) can't host the add-in either.
-      .catch(() => []);
-    const ready = frames.filter((frame) => typeof frame.result === "string");
-    const frame = ready.find((candidate) => candidate.result === hostNames[kind]) ?? ready[0];
-    return frame && { tabId: tab.id, frameId: frame.frameId, ...(tab.url && { tabUrl: tab.url }) };
+    const { tabUrl, frames } = await askWorker("findBridges", tabId);
+    const frame = frames.find((candidate) => candidate.hostName === hostNames[kind]) ?? frames[0];
+    return frame && { frameId: frame.frameId, ...(tabUrl && { tabUrl }) };
   }
 
-  function connect(frame: BridgeFrame): Connection {
-    const port = chrome.tabs.connect(frame.tabId, { frameId: frame.frameId, name: PORT_NAME });
-    const opened: Connection = { ...frame, port, pending: new Map() };
+  /** The engine can't open ports into tabs, so it asks the frame's relay to open one (see adopt). */
+  async function connect(frameId: number): Promise<Connection> {
+    let onOpened: (opened: Connection) => void = () => {};
+    const opened = new Promise<Connection>((resolve) => {
+      onOpened = (candidate) => candidate.frameId === frameId && resolve(candidate);
+      connectionListeners.add(onOpened);
+    });
+    try {
+      await askWorker("connectBridge", tabId, frameId).catch((error: unknown) => {
+        // No relay listening: the extension was reloaded or updated after the tab loaded.
+        throw new Error(
+          `the add-in frame didn't answer (${errorMessage(error)}). Reload the PowerPoint tab.`,
+        );
+      });
+      return await withDeadline(opened, "Connecting to the add-in frame", {
+        timeoutMs: CONNECT_TIMEOUT_MS,
+      });
+    } finally {
+      connectionListeners.delete(onOpened);
+    }
+  }
+
+  /** A relay port arrived: it replaces the current connection, whoever asked for it. */
+  function adopt(port: chrome.runtime.Port, frameId: number): void {
+    if (connection) close(connection);
+    const opened: Connection = { frameId, port, pending: new Map() };
+    connection = opened;
     let answered = false;
     port.onMessage.addListener((response: BridgeResponse) => {
       answered = true;
@@ -82,11 +100,11 @@ export function createExtensionHost(kind: OfficeHostKind): OfficeHost {
     });
     port.onDisconnect.addListener(() => {
       close(opened);
-      // A port that never answered has no relay behind it (e.g. the extension was reloaded but the tab wasn't);
-      // reconnecting would just loop. The failed request reports it instead.
+      // A port that never answered has no bridge behind it; reconnecting would just loop. The failed request
+      // reports it instead.
       if (answered) void refresh();
     });
-    return opened;
+    for (const listener of connectionListeners) listener(opened);
   }
 
   function close(closing: Connection): void {
@@ -111,9 +129,12 @@ export function createExtensionHost(kind: OfficeHostKind): OfficeHost {
   ): Promise<T> {
     const id = crypto.randomUUID();
     const response = new Promise<OpResponse>((resolve) => target.pending.set(id, resolve));
+    const startedAt = performance.now();
     try {
       target.port.postMessage({ id, op, args } satisfies BridgeRequest);
-      return unwrapOpResponse<T>(op, await withDeadline(response, `Op "${op}"`, options));
+      const settled = await withDeadline(response, `Op "${op}"`, options);
+      logOpTiming(op, startedAt, settled);
+      return unwrapOpResponse<T>(op, settled);
     } finally {
       target.pending.delete(id);
     }
@@ -130,11 +151,10 @@ export function createExtensionHost(kind: OfficeHostKind): OfficeHost {
         if (connection) close(connection);
         return setStatus(notFound);
       }
-      if (connection?.tabId !== frame.tabId || connection.frameId !== frame.frameId) {
-        if (connection) close(connection);
-        connection = connect(frame);
-      }
-      const info = await request<OfficeInfo>(connection, INFO_OP, undefined, {
+      const target =
+        connection?.frameId === frame.frameId ? connection : await connect(frame.frameId);
+      if (!isLatest()) return;
+      const info = await request<OfficeInfo>(target, INFO_OP, undefined, {
         timeoutMs: INFO_TIMEOUT_MS,
       });
       if (isLatest()) setStatus(statusFromInfo(info, kind, frame.tabUrl));
@@ -159,12 +179,13 @@ export function createExtensionHost(kind: OfficeHostKind): OfficeHost {
     return connection;
   }
 
-  chrome.tabs.onActivated.addListener(() => void refresh());
-  chrome.tabs.onUpdated.addListener((_tabId, change, tab) => {
-    if (tab.active && change.status === "complete") void refresh();
+  chrome.runtime.onConnect.addListener((port) => {
+    const { tab, frameId } = port.sender ?? {};
+    if (port.name === PORT_NAME && tab?.id === tabId && frameId !== undefined) adopt(port, frameId);
   });
+  // Reloading the tab or reopening the add-in drops the port; the new bridge announces itself.
   chrome.runtime.onMessage.addListener((message: { type?: unknown }, sender) => {
-    if (message.type === BRIDGE_READY_MESSAGE && sender.tab?.active) void refresh();
+    if (message.type === BRIDGE_READY_MESSAGE && sender.tab?.id === tabId) void refresh();
   });
   const firstRefresh = refresh();
 
@@ -184,18 +205,20 @@ export function createExtensionHost(kind: OfficeHostKind): OfficeHost {
       let target: Connection;
       try {
         target = await activeConnection();
+        if (!(await askWorker("userScriptsAvailable"))) return codeFailure(USER_SCRIPTS_OFF);
       } catch (error) {
         return codeFailure(errorMessage(error));
       }
-      if (!chrome.userScripts?.execute) return codeFailure(USER_SCRIPTS_OFF);
       try {
-        const execution = chrome.userScripts.execute<CodeRunResult>({
-          target: { tabId: target.tabId, frameIds: [target.frameId] },
-          world: "MAIN",
-          injectImmediately: true,
-          js: [{ code: `globalThis.${REALM_GLOBAL}.runCode(${codeBodySource(code)})` }],
-        });
+        const execution = askWorker(
+          "executeUserScript",
+          tabId,
+          target.frameId,
+          `globalThis.${REALM_GLOBAL}.runCode(${codeBodySource(code)})`,
+        );
+        const startedAt = performance.now();
         const [injection] = await withDeadline(execution, "The code run", options);
+        logOpTiming("execute_office_js", startedAt);
         if (!injection)
           return unknownOutcome(new Error("Chrome returned no result for the code run"));
         // An injection error means the code never started (syntax error, bridge missing), so the outcome is known.

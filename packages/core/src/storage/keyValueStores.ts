@@ -1,28 +1,5 @@
 import type { KeyValueStore } from "../contracts.ts";
 
-/** The slice of chrome.storage.local we use; core doesn't depend on @types/chrome. */
-interface ChromeStorageArea {
-  get(key: string): Promise<Record<string, unknown>>;
-  set(items: Record<string, unknown>): Promise<void>;
-  remove(key: string): Promise<void>;
-}
-
-declare const chrome: { storage: { local: ChromeStorageArea } };
-
-/** chrome.storage.local, for the extension side panel. */
-export function createChromeStore(): KeyValueStore {
-  const area = chrome.storage.local;
-  return {
-    async get<T>(key: string) {
-      const items = await area.get(key);
-      // chrome.storage returns what we stored under this key; set<T> is the only writer.
-      return items[key] as T | undefined;
-    },
-    set: (key, value) => area.set({ [key]: value }),
-    delete: (key) => area.remove(key),
-  };
-}
-
 /** localStorage with JSON values, for the add-in task pane. */
 export function createLocalStore(prefix = "footnote:"): KeyValueStore {
   return {

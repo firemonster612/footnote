@@ -8,19 +8,27 @@ One codebase, two thin loaders. Tool code is pure Office.js and runs wherever Of
 
 | Shell | Where the UI runs | Where Office.js runs | Use |
 |---|---|---|---|
-| Extension (Chrome MV3) | Chrome side panel | The org-deployed Claude add-in frame (`pivot.claude.ai`), reached by a packaged MAIN-world script | Work tenant without IT |
+| Extension (Chrome MV3) | Chrome side panel (agent in an offscreen document) | The org-deployed Claude add-in frame (`pivot.claude.ai`), reached by a packaged MAIN-world script | Work tenant without IT |
 | Add-in (XML manifest) | Office task pane | Same page | Personal account, future IT deployment |
 
 The UI and agent loop never touch Office objects directly. They call an `OfficeHost` RPC (`call(op, args) -> result`). The add-in shell implements it in-page; the extension shell forwards it to the bridge script in the add-in frame. The bridge only runs packaged code, so the frame's CSP doesn't matter except for raw code execution (see below).
 
-Model requests go straight from the side panel or task pane to the configured endpoint. Extension pages with host permissions are not bound by CORS; the add-in sends `x-api-key` because CLIProxyAPI's wildcard CORS header doesn't cover `Authorization`.
+Model requests go straight from the extension's engine or the task pane to the configured endpoint. Extension pages with host permissions are not bound by CORS; the add-in sends `x-api-key` because CLIProxyAPI's wildcard CORS header doesn't cover `Authorization`.
+
+## Extension runtime
+
+The agent runs in an offscreen document (the engine, `entrypoints/engine`), not in the side panel, so a task keeps going when the panel closes. The service worker alone would be a poor host: Chrome stops it when idle, including during long model streams. The service worker creates the engine on demand (reason `WORKERS`); the engine closes itself after 10 minutes with no panel open and no chat running, so quick tab switches keep undo checkpoints.
+
+- **Panel = view.** The side panel renders `FootnoteRoot` against `connectFootnoteApp` (`packages/core/src/remote`), a `FootnoteApp` mirror over a `chrome.runtime` port: the engine pushes settings, host status and session snapshots (transcripts as a tail patch), and the view's calls run as RPC. Files cross as base64. Approvals live in the engine, so they wait while the panel is closed.
+- **Per-tab panel.** The panel is disabled globally and enabled for the tab whose toolbar button was clicked (`sidePanel.setOptions({ tabId, path: "sidepanel.html?tab=<id>" })`), so Chrome hides it on other tabs and shows it again on that one. The toolbar badge shows "…" while that tab's chat runs with the panel hidden and "!" while an approval waits.
+- **Office access.** Each tab gets its own `OfficeHost` in the engine, and a chat stays on the tab it was running on whichever tab is active. The engine only has `chrome.runtime`, so the service worker does frame discovery (`scripting`), code runs (`userScripts.execute`), settings storage and the badge, each as a one-shot message that survives worker restarts. Op calls skip the worker: the relay in the add-in frame opens a port straight to the engine when asked.
 
 ## Packages
 
 ```
 packages/core        agent loop (Pi), providers, settings, permissions, context assembly, compaction, chat UI
 packages/powerpoint  PowerPoint ops (run in the Office realm), tool schemas, deck-state summary, skills
-apps/extension       WXT: side panel, bridge content script
+apps/extension       WXT: engine (offscreen), side panel view, service worker, bridge content scripts
 apps/addin           Vite: task pane page, manifest.xml
 ```
 

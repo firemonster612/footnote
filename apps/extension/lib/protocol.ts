@@ -1,7 +1,9 @@
-// Messages between the side panel, the ISOLATED-world relay, and the MAIN-world bridge in the add-in frame.
+// Messages between the engine (offscreen document), the side panel, the ISOLATED-world relay, and the MAIN-world
+// bridge in the add-in frame.
 //
-// side panel ──chrome port (tab+frame)──▶ relay ──window.postMessage──▶ bridge
-//            ◀───────────────────────────       ◀─────────────────────
+// engine ◀──chrome port (the relay opens it)──▶ relay ──window.postMessage──▶ bridge
+// side panel ──chrome port "footnote-view:<tabId>"──▶ engine
+// engine, side panel ──chrome.runtime.sendMessage──▶ service worker (lib/worker.ts)
 
 import type { OpResponse } from "@footnote/shell-kit/realm";
 
@@ -10,13 +12,19 @@ export const ADDIN_MATCHES = ["https://pivot.claude.ai/*"];
 
 export const PORT_NAME = "footnote-bridge";
 
+/** Service worker → relay: open a PORT_NAME port to the engine (it can't message tabs itself). */
+export const CONNECT_BRIDGE_MESSAGE = "footnote:connect-bridge";
+
+/** Side panel → engine: the port name carries the tab the panel belongs to. */
+export const VIEW_PORT_PREFIX = "footnote-view:";
+
 /** Pseudo-op the bridge answers with `OfficeInfo`. */
 export const INFO_OP = "footnote.info";
 
 /** Set on <html> by the bridge once Office is ready; value is `Office.context.host`. Readable from any world. */
 export const BRIDGE_ATTRIBUTE = "data-footnote-bridge";
 
-/** Relay → extension pages: the bridge in this frame became ready. */
+/** Relay → engine: the bridge in this frame became ready. */
 export const BRIDGE_READY_MESSAGE = "footnote:bridge-ready";
 
 /** MAIN-world global the bridge installs for `chrome.userScripts.execute` code runs. */

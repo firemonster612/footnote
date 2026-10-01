@@ -16,7 +16,7 @@ export default defineConfig({
     name: "Footnote",
     description: "Model-agnostic assistant that edits PowerPoint decks live.",
     action: { default_title: "Open Footnote" },
-    permissions: ["sidePanel", "storage", "scripting", "userScripts", "tabs"],
+    permissions: ["sidePanel", "storage", "scripting", "userScripts", "tabs", "offscreen"],
     host_permissions: [
       "https://pivot.claude.ai/*",
       "https://*.officeapps.live.com/*",

@@ -1,10 +1,11 @@
-// ISOLATED world, same frames as the bridge: forwards side-panel port messages to the MAIN-world bridge and back.
+// ISOLATED world, same frames as the bridge: forwards the engine's port messages to the MAIN-world bridge and back.
 
 import { defineContentScript } from "wxt/utils/define-content-script";
 import {
   ADDIN_MATCHES,
   BRIDGE_ATTRIBUTE,
   BRIDGE_READY_MESSAGE,
+  CONNECT_BRIDGE_MESSAGE,
   PORT_NAME,
   onBridgeResponse,
   postToBridge,
@@ -15,28 +16,33 @@ export default defineContentScript({
   matches: ADDIN_MATCHES,
   allFrames: true,
   main() {
-    const portsByRequest = new Map<string, chrome.runtime.Port>();
+    let engine: chrome.runtime.Port | undefined;
 
     onBridgeResponse((response) => {
-      const port = portsByRequest.get(response.id);
-      portsByRequest.delete(response.id);
       try {
-        port?.postMessage(response);
+        engine?.postMessage(response);
       } catch {
-        // The side panel closed while the op ran; nobody is waiting for this response.
+        // The engine went away while the op ran; nobody is waiting for this response.
       }
     });
 
-    chrome.runtime.onConnect.addListener((port) => {
-      if (port.name !== PORT_NAME) return;
-      port.onMessage.addListener((request: BridgeRequest) => {
-        portsByRequest.set(request.id, port);
-        postToBridge(request);
-      });
+    // The engine can't open ports into tabs, so it asks (through the service worker) and we open one to it.
+    // An open port is kept: the engine adopts the first one, and replacing it would drop requests in flight.
+    chrome.runtime.onMessage.addListener((message: { type?: unknown }, _sender, reply) => {
+      if (message.type !== CONNECT_BRIDGE_MESSAGE) return;
+      if (!engine) {
+        const opened = chrome.runtime.connect({ name: PORT_NAME });
+        opened.onMessage.addListener((request: BridgeRequest) => postToBridge(request));
+        opened.onDisconnect.addListener(() => {
+          if (engine === opened) engine = undefined;
+        });
+        engine = opened;
+      }
+      reply(true);
     });
 
     whenBridgeReady(() => {
-      // Rejects when no side panel is open to hear it; the panel discovers the frame itself when it opens.
+      // Rejects when the engine isn't running; it finds the frame itself when it starts.
       chrome.runtime.sendMessage({ type: BRIDGE_READY_MESSAGE }).catch(() => {});
     });
   },
