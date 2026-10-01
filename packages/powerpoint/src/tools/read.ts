@@ -166,7 +166,12 @@ export function createReadTools(env: ToolEnv, guard: WriteGuard): FootnoteTool[]
     }),
     describeCall: (args: { slideId: string }) => `Render slide ${args.slideId}`,
     async execute(_id, { slideId, width }) {
-      const data = await host.call<string>("render_slide", { slideId, ...(width && { width }) });
+      const data = await host.call<unknown>("render_slide", { slideId, ...(width && { width }) });
+      // An image block with non-string data poisons every later request (Anthropic rejects the whole transcript).
+      if (typeof data !== "string" || data.length === 0)
+        throw new Error(
+          `PowerPoint returned no image for slide ${slideId}. Try again, or check the slide with get_slide.`,
+        );
       return {
         content: [
           { type: "text", text: `Slide ${slideId}:` },

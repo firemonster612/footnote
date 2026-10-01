@@ -42,7 +42,7 @@ export function toLlmMessages(messages: AgentMessage[], keepImageMessages: numbe
   let imageMessagesSeen = 0;
   const converted: Message[] = [];
   for (const message of messages.toReversed()) {
-    const llmMessage = toLlmMessage(message);
+    const llmMessage = withSendableImages(toLlmMessage(message));
     if (
       (llmMessage.role === "user" || llmMessage.role === "toolResult") &&
       hasImages(llmMessage.content)
@@ -86,6 +86,31 @@ type MessageContent = string | (TextContent | ImageContent)[];
 
 function hasImages(content: MessageContent): content is (TextContent | ImageContent)[] {
   return typeof content !== "string" && content.some((block) => block.type === "image");
+}
+
+/** Images with missing or non-string data (a failed render) would make the provider reject the whole request. */
+function isSendableImage(block: ImageContent): boolean {
+  return typeof block.data === "string" && block.data.length > 0;
+}
+
+const brokenImagePlaceholder: TextContent = {
+  type: "text",
+  text: "[Image unavailable: it failed to load when it was captured.]",
+};
+
+function withSendableImages<T extends Message>(message: T): T {
+  if (typeof message.content === "string") return message;
+  const content = message.content as (TextContent | ImageContent | { type: string })[];
+  if (!content.some((block) => block.type === "image" && !isSendableImage(block as ImageContent)))
+    return message;
+  return {
+    ...message,
+    content: content.map((block) =>
+      block.type === "image" && !isSendableImage(block as ImageContent)
+        ? brokenImagePlaceholder
+        : block,
+    ),
+  };
 }
 
 function withoutImages(content: (TextContent | ImageContent)[]): TextContent[] {

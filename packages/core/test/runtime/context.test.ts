@@ -160,3 +160,23 @@ describe("compaction", () => {
     expect(breaker.tripped(4)).toBe(false);
   });
 });
+
+describe("toLlmMessages with a broken image", () => {
+  it("replaces image blocks whose data isn't a string so the provider accepts the request", () => {
+    const broken = {
+      role: "toolResult",
+      toolCallId: "t1",
+      toolName: "render_slide",
+      content: [
+        { type: "text", text: "Slide 1:" },
+        { type: "image", data: null, mimeType: "image/png" },
+      ],
+      isError: false,
+      timestamp: 1,
+    } as unknown as AgentMessage;
+    const [converted] = toLlmMessages([broken], 3);
+    const content = converted!.content as { type: string; text?: string }[];
+    expect(content.map((block) => block.type)).toEqual(["text", "text"]);
+    expect(content[1]!.text).toContain("Image unavailable");
+  });
+});
