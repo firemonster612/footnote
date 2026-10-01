@@ -2,7 +2,8 @@ import { ShieldCheck } from "lucide-react";
 import { useState } from "react";
 import type { ApprovalDecision, ApprovalRequest } from "../../contracts.ts";
 import { CodeBlock } from "../components/CodeBlock.tsx";
-import { Button, TextInput } from "../components/controls.tsx";
+import { Button } from "../components/button.tsx";
+import { Input } from "../components/input.tsx";
 
 export function ApprovalCard({
   request,
@@ -18,19 +19,19 @@ export function ApprovalCard({
   return (
     <section
       aria-label="Approval needed"
-      className="flex flex-col gap-2 rounded-md border border-amber-300 bg-amber-50/60 p-2 dark:border-amber-700/70 dark:bg-amber-950/30"
+      className="flex flex-col gap-2 rounded-lg border border-warning-border bg-warning-subtle p-2.5"
     >
       <div className="flex items-start gap-2">
-        <ShieldCheck size={15} className="mt-0.5 shrink-0 text-amber-700 dark:text-amber-400" />
+        <ShieldCheck size={15} className="mt-0.5 shrink-0 text-warning" />
         <span className="min-w-0 flex-1 font-medium">{request.summary}</span>
       </div>
       {request.code !== undefined && <CodeBlock code={request.code} />}
-      <TextInput
+      <Input
         value={comment}
         onChange={(event) => setComment(event.target.value)}
         placeholder="Comment for the model (optional)"
         aria-label="Comment for the model"
-        className="h-7 text-[12px]"
+        className="h-7 text-small"
       />
       <div className="flex flex-wrap gap-1.5">
         <Button

@@ -8,23 +8,33 @@ import {
   LoaderCircle,
   type LucideIcon,
 } from "lucide-react";
-import { useState } from "react";
 import type { FootnoteTool } from "../../contracts.ts";
 import { CodeBlock } from "../components/CodeBlock.tsx";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+  disclosureChevron,
+} from "../components/collapsible.tsx";
 import { ImageThumbnail } from "../components/ImageThumbnail.tsx";
+import { cn } from "../lib/utils.ts";
 import type { ToolCallStatus } from "./transcript.ts";
 
 const statusIcons: Record<ToolCallStatus, { icon: LucideIcon; className: string; label: string }> =
   {
     "awaiting-approval": {
       icon: Hand,
-      className: "text-amber-600 dark:text-amber-400",
+      className: "text-warning",
       label: "Waiting for approval",
     },
-    running: { icon: LoaderCircle, className: "animate-spin text-neutral-500", label: "Running" },
-    done: { icon: CircleCheck, className: "text-accent-fg", label: "Done" },
-    error: { icon: CircleX, className: "text-red-600 dark:text-red-400", label: "Failed" },
-    "not-run": { icon: Ban, className: "text-neutral-400", label: "Not run" },
+    running: {
+      icon: LoaderCircle,
+      className: "animate-spin text-muted-foreground",
+      label: "Running",
+    },
+    done: { icon: CircleCheck, className: "text-accent-text", label: "Done" },
+    error: { icon: CircleX, className: "text-danger", label: "Failed" },
+    "not-run": { icon: Ban, className: "text-subtle-foreground", label: "Not run" },
   };
 
 export function describeToolCall(call: ToolCall, tool: FootnoteTool | undefined): string {
@@ -54,7 +64,6 @@ export function ToolCard({
   result: ToolResultMessage | undefined;
   status: ToolCallStatus;
 }) {
-  const [expanded, setExpanded] = useState(false);
   const { icon: StatusIcon, className, label } = statusIcons[status];
   const images = result?.content.filter((part) => part.type === "image") ?? [];
   const resultText = result?.content
@@ -63,20 +72,12 @@ export function ToolCard({
   const code = typeof call.arguments.code === "string" ? call.arguments.code : undefined;
 
   return (
-    <div className="rounded-md border border-neutral-200 dark:border-neutral-700">
-      <button
-        type="button"
-        onClick={() => setExpanded(!expanded)}
-        aria-expanded={expanded}
-        className="flex w-full items-center gap-2 px-2 py-1.5 text-left text-[12px] hover:bg-neutral-50 dark:hover:bg-neutral-800"
-      >
-        <StatusIcon size={14} className={`shrink-0 ${className}`} aria-label={label} />
+    <Collapsible className="overflow-hidden rounded-md border">
+      <CollapsibleTrigger className="group flex h-8 w-full cursor-default items-center gap-2 px-2 text-left text-small transition-colors duration-100 select-none hover:bg-highlight focus-visible:outline-offset-[-2px]">
+        <StatusIcon size={14} className={cn("shrink-0", className)} aria-label={label} />
         <span className="min-w-0 flex-1 truncate">{describeToolCall(call, tool)}</span>
-        <ChevronRight
-          size={14}
-          className={`shrink-0 text-neutral-400 transition-transform ${expanded ? "rotate-90" : ""}`}
-        />
-      </button>
+        <ChevronRight size={14} className={cn(disclosureChevron, "text-subtle-foreground")} />
+      </CollapsibleTrigger>
       {images.length > 0 && (
         <div className="flex flex-wrap gap-1.5 px-2 pb-2">
           {images.map((image, index) => (
@@ -84,9 +85,9 @@ export function ToolCard({
           ))}
         </div>
       )}
-      {expanded && (
-        <div className="flex flex-col gap-1.5 border-t border-neutral-200 p-2 dark:border-neutral-700">
-          <span className="font-mono text-[11px] text-neutral-500">{call.name}</span>
+      <CollapsibleContent>
+        <div className="flex flex-col gap-1.5 border-t p-2">
+          <span className="font-mono text-caption text-muted-foreground">{call.name}</span>
           {code !== undefined ? (
             <CodeBlock code={code} />
           ) : (
@@ -94,17 +95,16 @@ export function ToolCard({
           )}
           {resultText && (
             <pre
-              className={`max-h-60 overflow-auto rounded-md p-2 font-mono text-[11px] leading-4 whitespace-pre-wrap ${
-                result?.isError
-                  ? "bg-red-50 text-red-800 dark:bg-red-950 dark:text-red-300"
-                  : "bg-neutral-50 dark:bg-neutral-800/60"
-              }`}
+              className={cn(
+                "max-h-60 overflow-auto rounded-md p-2 font-mono text-caption leading-4 whitespace-pre-wrap",
+                result?.isError ? "bg-danger-subtle text-danger" : "bg-muted",
+              )}
             >
               {resultText}
             </pre>
           )}
         </div>
-      )}
-    </div>
+      </CollapsibleContent>
+    </Collapsible>
   );
 }

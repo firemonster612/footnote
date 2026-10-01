@@ -1,17 +1,34 @@
+import { ChevronRight } from "lucide-react";
 import { useState, type ReactNode } from "react";
 import type { ApiFormat, FootnoteApp, PermissionMode, Settings } from "../../contracts.ts";
 import { clampThinkingLevel, thinkingLevelLabels, thinkingLevelOrder } from "../chat/transcript.ts";
-import { Select, TextInput } from "../components/controls.tsx";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+  disclosureChevron,
+} from "../components/collapsible.tsx";
+import { Input } from "../components/input.tsx";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "../components/select.tsx";
 import type { ModelList } from "../hooks.ts";
 import { EndpointSection } from "./EndpointSection.tsx";
 import { Field } from "./Field.tsx";
 import { SkillsSection } from "./SkillsSection.tsx";
 
 const apiFormatLabels: Record<ApiFormat, string> = {
-  "anthropic-messages": "Anthropic Messages",
-  "openai-responses": "OpenAI Responses",
-  "openai-completions": "Chat Completions",
+  "anthropic-messages": "Anthropic",
+  "openai-responses": "Responses",
+  "openai-completions": "Completions",
 };
+
+/** Select value for "no override"; Radix Select reserves the empty string for "nothing selected". */
+const autoFormat = "auto";
 
 const permissionModeLabels: Record<PermissionMode, string> = {
   ask: "Ask before edits",
@@ -47,7 +64,7 @@ export function SettingsView({
 
   return (
     <div className="min-h-0 flex-1 overflow-y-auto">
-      <div className="flex flex-col gap-5 p-3">
+      <div className="flex flex-col gap-6 p-3">
         <Section title="Connection">
           <EndpointSection app={app} settings={settings} modelList={modelList} />
           <SecretField
@@ -63,60 +80,62 @@ export function SettingsView({
           <Field label="Permissions">
             {(id) => (
               <Select
-                id={id}
-                variant="field"
                 value={settings.defaultPermissionMode}
-                onChange={(event) =>
-                  app.settings.update({
-                    defaultPermissionMode: event.target.value === "full" ? "full" : "ask",
-                  })
+                onValueChange={(mode) =>
+                  app.settings.update({ defaultPermissionMode: mode === "full" ? "full" : "ask" })
                 }
               >
-                {Object.entries(permissionModeLabels).map(([mode, label]) => (
-                  <option key={mode} value={mode}>
-                    {label}
-                  </option>
-                ))}
+                <SelectTrigger id={id}>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {Object.entries(permissionModeLabels).map(([mode, label]) => (
+                    <SelectItem key={mode} value={mode}>
+                      {label}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
               </Select>
             )}
           </Field>
           <Field label="Model">
             {(id) => (
-              <Select
-                id={id}
-                variant="field"
-                value={settings.modelId ?? ""}
-                onChange={(event) => changeDefaultModel(event.target.value)}
-              >
-                {!defaultModel && (
-                  <option value={settings.modelId ?? ""}>
-                    {settings.modelId ?? "Choose a model"}
-                  </option>
-                )}
-                {models.map((model) => (
-                  <option key={model.id} value={model.id}>
-                    {model.id}
-                  </option>
-                ))}
+              <Select value={settings.modelId ?? ""} onValueChange={changeDefaultModel}>
+                <SelectTrigger id={id}>
+                  <SelectValue placeholder="Choose a model" />
+                </SelectTrigger>
+                <SelectContent>
+                  {settings.modelId && !defaultModel && (
+                    <SelectItem value={settings.modelId}>{settings.modelId}</SelectItem>
+                  )}
+                  {models.map((model) => (
+                    <SelectItem key={model.id} value={model.id}>
+                      {model.id}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
               </Select>
             )}
           </Field>
           <Field label="Thinking effort">
             {(id) => (
               <Select
-                id={id}
-                variant="field"
                 value={settings.thinkingLevel}
-                onChange={(event) => {
-                  const thinkingLevel = levels.find((level) => level === event.target.value);
+                onValueChange={(value) => {
+                  const thinkingLevel = levels.find((level) => level === value);
                   if (thinkingLevel) void app.settings.update({ thinkingLevel });
                 }}
               >
-                {levels.map((level) => (
-                  <option key={level} value={level}>
-                    {thinkingLevelLabels[level]}
-                  </option>
-                ))}
+                <SelectTrigger id={id}>
+                  <SelectValue />
+                </SelectTrigger>
+                <SelectContent>
+                  {levels.map((level) => (
+                    <SelectItem key={level} value={level}>
+                      {thinkingLevelLabels[level]}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
               </Select>
             )}
           </Field>
@@ -124,43 +143,51 @@ export function SettingsView({
 
         {models.length > 0 && (
           <Section title="API format">
-            <details className="group">
-              <summary className="cursor-pointer text-[12px] text-neutral-600 select-none dark:text-neutral-400">
+            <Collapsible>
+              <CollapsibleTrigger className="group flex cursor-default items-center gap-1 rounded-sm text-small text-muted-foreground select-none hover:text-foreground">
+                <ChevronRight size={13} className={disclosureChevron} />
                 {Object.keys(settings.apiOverrides).length} overridden of {models.length}
-              </summary>
-              <ul className="mt-2 flex flex-col gap-1">
-                {models.map((model) => (
-                  <li key={model.id} className="flex items-center gap-2">
-                    <span
-                      className="min-w-0 flex-1 truncate font-mono text-[12px]"
-                      title={model.id}
-                    >
-                      {model.id}
-                    </span>
-                    <Select
-                      variant="field"
-                      aria-label={`API format for ${model.id}`}
-                      value={settings.apiOverrides[model.id] ?? ""}
-                      onChange={(event) =>
-                        changeApiOverride(model.id, parseApiFormat(event.target.value))
-                      }
-                      className="w-40 shrink-0"
-                    >
-                      <option value="">
-                        {settings.apiOverrides[model.id]
-                          ? "Auto"
-                          : `Auto (${apiFormatLabels[model.api]})`}
-                      </option>
-                      {Object.entries(apiFormatLabels).map(([format, label]) => (
-                        <option key={format} value={format}>
-                          {label}
-                        </option>
-                      ))}
-                    </Select>
-                  </li>
-                ))}
-              </ul>
-            </details>
+              </CollapsibleTrigger>
+              <CollapsibleContent>
+                <ul className="flex flex-col gap-1 pt-2">
+                  {models.map((model) => (
+                    <li key={model.id} className="flex items-center gap-2">
+                      <span
+                        className="min-w-0 flex-1 truncate font-mono text-small"
+                        title={model.id}
+                      >
+                        {model.id}
+                      </span>
+                      <Select
+                        value={settings.apiOverrides[model.id] ?? autoFormat}
+                        onValueChange={(value) =>
+                          changeApiOverride(model.id, parseApiFormat(value))
+                        }
+                      >
+                        <SelectTrigger
+                          aria-label={`API format for ${model.id}`}
+                          className="w-44 shrink-0 text-small"
+                        >
+                          <SelectValue />
+                        </SelectTrigger>
+                        <SelectContent>
+                          <SelectItem value={autoFormat}>
+                            {settings.apiOverrides[model.id]
+                              ? "Auto"
+                              : `Auto · ${apiFormatLabels[model.api]}`}
+                          </SelectItem>
+                          {Object.entries(apiFormatLabels).map(([format, label]) => (
+                            <SelectItem key={format} value={format}>
+                              {label}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </li>
+                  ))}
+                </ul>
+              </CollapsibleContent>
+            </Collapsible>
           </Section>
         )}
 
@@ -179,7 +206,7 @@ function parseApiFormat(value: string): ApiFormat | undefined {
 function Section({ title, children }: { title: string; children: ReactNode }) {
   return (
     <section className="flex flex-col gap-2.5">
-      <h2 className="text-[11px] font-semibold tracking-wide text-neutral-500 uppercase">
+      <h2 className="text-caption font-semibold tracking-wide text-subtle-foreground uppercase">
         {title}
       </h2>
       {children}
@@ -200,7 +227,7 @@ function SecretField({
   return (
     <Field label={label}>
       {(id) => (
-        <TextInput
+        <Input
           id={id}
           type="password"
           value={draft}

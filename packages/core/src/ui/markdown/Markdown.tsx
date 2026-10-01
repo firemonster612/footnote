@@ -11,11 +11,7 @@ function renderBlocks(blocks: Block[]): ReactNode[] {
   return blocks.map((block, index) => <BlockView key={index} block={block} />);
 }
 
-const headingClass = [
-  "text-base font-semibold",
-  "text-[15px] font-semibold",
-  "text-sm font-semibold",
-];
+const headingClass = ["text-title font-semibold", "text-title font-semibold", "font-semibold"];
 
 function BlockView({ block }: { block: Block }) {
   switch (block.type) {
@@ -35,7 +31,7 @@ function BlockView({ block }: { block: Block }) {
       return <CodeBlock code={block.text} />;
     case "quote":
       return (
-        <blockquote className="flex flex-col gap-2 border-l-2 border-neutral-300 pl-3 text-neutral-600 dark:border-neutral-600 dark:text-neutral-400">
+        <blockquote className="flex flex-col gap-2 border-l-2 border-input pl-3 text-muted-foreground">
           {renderBlocks(block.children)}
         </blockquote>
       );
@@ -56,13 +52,13 @@ function BlockView({ block }: { block: Block }) {
     case "table":
       return (
         <div className="overflow-x-auto">
-          <table className="w-full border-collapse text-xs">
+          <table className="w-full border-collapse text-small">
             <thead>
               <tr>
                 {block.header.map((cell, index) => (
                   <th
                     key={index}
-                    className="border-b border-neutral-300 px-2 py-1 text-left font-semibold dark:border-neutral-600"
+                    className="border-b border-input px-2 py-1 text-left font-semibold"
                   >
                     {renderInline(cell)}
                   </th>
@@ -73,10 +69,7 @@ function BlockView({ block }: { block: Block }) {
               {block.rows.map((row, rowIndex) => (
                 <tr key={rowIndex}>
                   {row.map((cell, index) => (
-                    <td
-                      key={index}
-                      className="border-b border-neutral-200 px-2 py-1 align-top dark:border-neutral-700"
-                    >
+                    <td key={index} className="border-b px-2 py-1 align-top">
                       {renderInline(cell)}
                     </td>
                   ))}
@@ -87,7 +80,7 @@ function BlockView({ block }: { block: Block }) {
         </div>
       );
     case "rule":
-      return <hr className="border-neutral-200 dark:border-neutral-700" />;
+      return <hr />;
     default:
       return block satisfies never;
   }
@@ -100,10 +93,7 @@ function renderInline(nodes: Inline[]): ReactNode[] {
         return node.text;
       case "code":
         return (
-          <code
-            key={index}
-            className="rounded bg-neutral-100 px-1 py-px font-mono text-[12px] dark:bg-neutral-800"
-          >
+          <code key={index} className="rounded-sm bg-muted px-1 py-px font-mono text-small">
             {node.text}
           </code>
         );
@@ -120,7 +110,7 @@ function renderInline(nodes: Inline[]): ReactNode[] {
             href={node.href}
             target="_blank"
             rel="noopener noreferrer"
-            className="text-accent-fg underline underline-offset-2"
+            className="text-accent-text underline underline-offset-2"
           >
             {renderInline(node.children)}
           </a>

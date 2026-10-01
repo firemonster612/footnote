@@ -7,10 +7,22 @@ import {
   Square,
   Undo2,
   X,
+  type LucideIcon,
 } from "lucide-react";
 import { useRef, useState } from "react";
-import type { ChatSession, ChatSessionState, ModelInfo } from "../../contracts.ts";
-import { IconButton, Select } from "../components/controls.tsx";
+import type { ChatSession, ChatSessionState, ModelInfo, PermissionMode } from "../../contracts.ts";
+import { Badge } from "../components/badge.tsx";
+import { IconButton } from "../components/icon-button.tsx";
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from "../components/select.tsx";
+import { ToggleGroup, ToggleGroupItem } from "../components/toggle-group.tsx";
+import { Tooltip, TooltipContent, TooltipTrigger } from "../components/tooltip.tsx";
+import { cn } from "../lib/utils.ts";
 import { clampThinkingLevel, formatTokens, thinkingLevelLabels } from "./transcript.ts";
 
 export function Composer({
@@ -50,38 +62,34 @@ export function Composer({
     if (level) session.setThinkingLevel(level);
   }
 
-  const fullAccess = state.permissionMode === "full";
-
   return (
-    <div className="flex flex-col gap-1.5 border-t border-neutral-200 p-2 dark:border-neutral-800">
+    <div className="flex flex-col gap-1.5 border-t p-2">
       {state.stagedAttachments.length > 0 && (
-        <div className="flex flex-wrap gap-1.5">
+        <div className="flex flex-wrap gap-1">
           {state.stagedAttachments.map((attachment) => (
-            <span
+            <Badge
               key={attachment.id}
               title={
                 attachment.summary ? `${attachment.name} · ${attachment.summary}` : attachment.name
               }
-              className="inline-flex max-w-full items-center gap-1 rounded border border-neutral-200 py-0.5 pr-0.5 pl-1.5 text-[11px] dark:border-neutral-700"
+              className="pr-0.5 text-foreground"
             >
-              <FileText size={12} className="shrink-0 text-neutral-500" />
+              <FileText size={12} className="text-subtle-foreground" />
               <span className="truncate">{attachment.name}</span>
               {attachment.summary && (
-                <span className="shrink-0 text-neutral-500">{attachment.summary}</span>
+                <span className="shrink-0 text-subtle-foreground">{attachment.summary}</span>
               )}
-              <button
-                type="button"
+              <IconButton
+                icon={X}
+                label={`Remove ${attachment.name}`}
                 onClick={() => session.unstageAttachment(attachment.id)}
-                aria-label={`Remove ${attachment.name}`}
-                className="rounded p-0.5 text-neutral-500 hover:bg-neutral-100 dark:hover:bg-neutral-800"
-              >
-                <X size={12} />
-              </button>
-            </span>
+                className="size-5 rounded-sm [&_svg]:size-3"
+              />
+            </Badge>
           ))}
         </div>
       )}
-      <div className="flex flex-col rounded-lg border border-neutral-300 bg-white focus-within:border-accent dark:border-neutral-700 dark:bg-neutral-900">
+      <div className="flex flex-col rounded-lg border border-input bg-background shadow-control transition-[border-color,box-shadow] duration-100 hover:border-input-hover has-[textarea:focus]:border-ring has-[textarea:focus]:ring-2 has-[textarea:focus]:ring-ring/20">
         <textarea
           value={text}
           onChange={(event) => setText(event.target.value)}
@@ -99,7 +107,7 @@ export function Composer({
           rows={2}
           placeholder={state.isStreaming ? "Add to the current task" : "Ask Footnote"}
           aria-label="Message"
-          className="max-h-48 min-h-12 resize-none bg-transparent px-2.5 pt-2 pb-1 outline-none [field-sizing:content] placeholder:text-neutral-400"
+          className="max-h-48 min-h-12 resize-none bg-transparent px-2.5 pt-2 pb-1 outline-none [field-sizing:content] placeholder:text-subtle-foreground focus-visible:outline-none"
         />
         <div className="flex items-center gap-0.5 px-1 pb-1">
           <IconButton
@@ -118,43 +126,62 @@ export function Composer({
             }}
           />
           <Select
-            aria-label="Model"
             value={state.modelId ?? ""}
-            onChange={(event) => changeModel(event.target.value)}
+            onValueChange={changeModel}
             disabled={models.length === 0}
-            className="max-w-40"
           >
-            {!currentModel && (
-              <option value={state.modelId ?? ""}>{state.modelId ?? "No model"}</option>
-            )}
-            {models.map((model) => (
-              <option key={model.id} value={model.id}>
-                {model.id}
-              </option>
-            ))}
+            <SelectTrigger variant="ghost" aria-label="Model" className="max-w-40">
+              <SelectValue placeholder="No model" />
+            </SelectTrigger>
+            <SelectContent>
+              {state.modelId && !currentModel && (
+                <SelectItem value={state.modelId}>{state.modelId}</SelectItem>
+              )}
+              {models.map((model) => (
+                <SelectItem key={model.id} value={model.id}>
+                  {model.id}
+                </SelectItem>
+              ))}
+            </SelectContent>
           </Select>
           <Select
-            aria-label="Thinking effort"
             value={state.thinkingLevel}
-            onChange={(event) => {
-              const level = thinkingLevels.find((candidate) => candidate === event.target.value);
+            onValueChange={(value) => {
+              const level = thinkingLevels.find((candidate) => candidate === value);
               if (level) session.setThinkingLevel(level);
             }}
-            className="shrink-0"
           >
-            {thinkingLevels.map((level) => (
-              <option key={level} value={level}>
-                {thinkingLevelLabels[level]}
-              </option>
-            ))}
+            <SelectTrigger variant="ghost" aria-label="Thinking effort" className="shrink-0">
+              <SelectValue />
+            </SelectTrigger>
+            <SelectContent>
+              {thinkingLevels.map((level) => (
+                <SelectItem key={level} value={level}>
+                  {thinkingLevelLabels[level]}
+                </SelectItem>
+              ))}
+            </SelectContent>
           </Select>
-          <IconButton
-            icon={fullAccess ? ShieldOff : ShieldCheck}
-            label={fullAccess ? "Full access: edits run without asking" : "Ask before edits"}
-            aria-pressed={fullAccess}
-            onClick={() => session.setPermissionMode(fullAccess ? "ask" : "full")}
-            className={fullAccess ? "text-amber-600 dark:text-amber-400" : ""}
-          />
+          <ToggleGroup
+            type="single"
+            aria-label="Permissions"
+            value={state.permissionMode}
+            onValueChange={(mode) => {
+              if (mode === "ask" || mode === "full") session.setPermissionMode(mode);
+            }}
+            className="ml-0.5"
+          >
+            {permissionModes.map(({ mode, icon: Icon, label, className }) => (
+              <Tooltip key={mode}>
+                <TooltipTrigger asChild>
+                  <ToggleGroupItem value={mode} aria-label={label} className={className}>
+                    <Icon size={14} />
+                  </ToggleGroupItem>
+                </TooltipTrigger>
+                <TooltipContent>{label}</TooltipContent>
+              </Tooltip>
+            ))}
+          </ToggleGroup>
           {state.canUndo && !state.isStreaming && (
             <IconButton icon={Undo2} label="Undo last turn" onClick={onUndo} />
           )}
@@ -164,16 +191,13 @@ export function Composer({
             <IconButton icon={Square} label="Stop" onClick={() => session.abort()} />
           )}
           {(!state.isStreaming || canSend) && (
-            <button
-              type="button"
+            <IconButton
+              icon={ArrowUp}
+              label={state.isStreaming ? "Send to the running task" : "Send"}
+              variant="primary"
               onClick={submit}
               disabled={!canSend}
-              aria-label={state.isStreaming ? "Send to the running task" : "Send"}
-              title={state.isStreaming ? "Send to the running task" : "Send"}
-              className="inline-flex size-7 shrink-0 items-center justify-center rounded-md bg-accent text-white hover:bg-accent-hover disabled:opacity-40"
-            >
-              <ArrowUp size={16} />
-            </button>
+            />
           )}
         </div>
       </div>
@@ -181,41 +205,62 @@ export function Composer({
   );
 }
 
+const permissionModes: {
+  mode: PermissionMode;
+  icon: LucideIcon;
+  label: string;
+  className?: string;
+}[] = [
+  { mode: "ask", icon: ShieldCheck, label: "Ask before edits" },
+  {
+    mode: "full",
+    icon: ShieldOff,
+    label: "Full access: edits run without asking",
+    className: "aria-checked:text-warning",
+  },
+];
+
 const ringRadius = 6;
 const ringCircumference = 2 * Math.PI * ringRadius;
 
 function ContextUsage({ tokens, window }: { tokens: number; window: number }) {
   const fraction = Math.min(tokens / window, 1);
   const label = `Context ${formatTokens(tokens)} of ${formatTokens(window)} tokens`;
-  const tone = fraction > 0.85 ? "text-amber-600 dark:text-amber-400" : "text-neutral-500";
   return (
-    <span
-      role="img"
-      aria-label={label}
-      title={label}
-      className={`inline-flex size-7 items-center justify-center ${tone}`}
-    >
-      <svg width="16" height="16" viewBox="0 0 16 16" className="-rotate-90">
-        <circle
-          cx="8"
-          cy="8"
-          r={ringRadius}
-          fill="none"
-          stroke="currentColor"
-          strokeOpacity="0.25"
-          strokeWidth="2"
-        />
-        <circle
-          cx="8"
-          cy="8"
-          r={ringRadius}
-          fill="none"
-          stroke="currentColor"
-          strokeWidth="2"
-          strokeDasharray={ringCircumference}
-          strokeDashoffset={ringCircumference * (1 - fraction)}
-        />
-      </svg>
-    </span>
+    <Tooltip>
+      <TooltipTrigger asChild>
+        <span
+          role="img"
+          aria-label={label}
+          className={cn(
+            "inline-flex size-7 items-center justify-center text-subtle-foreground",
+            fraction > 0.85 && "text-warning",
+          )}
+        >
+          <svg width="16" height="16" viewBox="0 0 16 16" className="-rotate-90">
+            <circle
+              cx="8"
+              cy="8"
+              r={ringRadius}
+              fill="none"
+              stroke="currentColor"
+              strokeOpacity="0.25"
+              strokeWidth="2"
+            />
+            <circle
+              cx="8"
+              cy="8"
+              r={ringRadius}
+              fill="none"
+              stroke="currentColor"
+              strokeWidth="2"
+              strokeDasharray={ringCircumference}
+              strokeDashoffset={ringCircumference * (1 - fraction)}
+            />
+          </svg>
+        </span>
+      </TooltipTrigger>
+      <TooltipContent>{label}</TooltipContent>
+    </Tooltip>
   );
 }

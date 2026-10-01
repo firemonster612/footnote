@@ -15,10 +15,7 @@ const width = Number(params.get("width") ?? 400);
 
 createRoot(document.getElementById("root")!).render(
   <StrictMode>
-    <div
-      className="mx-auto h-full border-x border-neutral-200 dark:border-neutral-800"
-      style={{ width }}
-    >
+    <div className="mx-auto h-full border-x" style={{ width }}>
       <FootnoteRoot app={app} />
     </div>
   </StrictMode>,

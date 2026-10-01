@@ -1,6 +1,7 @@
 import { renderToStaticMarkup } from "react-dom/server";
 import { expect, test } from "vitest";
 import { ChatView } from "../../src/ui/chat/ChatView.tsx";
+import { TooltipProvider } from "../../src/ui/components/tooltip.tsx";
 import { createFakeApp } from "../../src/ui/dev/fakeApp.ts";
 
 test("the demo chat renders every message, tool and approval state", async () => {
@@ -16,7 +17,9 @@ test("the demo chat renders every message, tool and approval state", async () =>
       .map((tool) => [tool.name, tool]),
   );
   const html = renderToStaticMarkup(
-    <ChatView session={session} models={await app.models.list()} tools={tools} />,
+    <TooltipProvider>
+      <ChatView session={session} models={await app.models.list()} tools={tools} />
+    </TooltipProvider>,
   );
 
   const expected = [

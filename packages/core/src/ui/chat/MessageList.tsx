@@ -2,6 +2,13 @@ import type { AssistantMessage, ToolResultMessage, UserMessage } from "@earendil
 import { ChevronRight, FileText, LoaderCircle, TriangleAlert } from "lucide-react";
 import { useLayoutEffect, useMemo, useRef } from "react";
 import type { AgentMessage, ChatSession, ChatSessionState, FootnoteTool } from "../../contracts.ts";
+import { Badge } from "../components/badge.tsx";
+import {
+  Collapsible,
+  CollapsibleContent,
+  CollapsibleTrigger,
+  disclosureChevron,
+} from "../components/collapsible.tsx";
 import { ImageThumbnail } from "../components/ImageThumbnail.tsx";
 import { Markdown } from "../markdown/Markdown.tsx";
 import { ApprovalCard } from "./ApprovalCard.tsx";
@@ -71,7 +78,11 @@ export function MessageList({
         {state.messages.map((message, index) => renderMessage(message, index))}
         {state.streamingMessage && renderMessage(state.streamingMessage, "streaming", true)}
         {waiting && (
-          <LoaderCircle size={16} className="animate-spin text-neutral-400" aria-label="Working" />
+          <LoaderCircle
+            size={16}
+            className="animate-spin text-subtle-foreground"
+            aria-label="Working"
+          />
         )}
         {state.pendingApprovals.map((request) => (
           <ApprovalCard
@@ -93,13 +104,10 @@ function UserMessageView({ message }: { message: UserMessage }) {
       {(attachmentNames.length > 0 || images.length > 0) && (
         <div className="flex flex-wrap items-center justify-end gap-1.5">
           {attachmentNames.map((name, index) => (
-            <span
-              key={index}
-              className="inline-flex max-w-48 items-center gap-1 rounded border border-neutral-200 px-1.5 py-0.5 text-[11px] text-neutral-600 dark:border-neutral-700 dark:text-neutral-400"
-            >
-              <FileText size={12} className="shrink-0" />
+            <Badge key={index} className="max-w-48">
+              <FileText size={12} />
               <span className="truncate">{name}</span>
-            </span>
+            </Badge>
           ))}
           {images.map((image, index) => (
             <ImageThumbnail key={index} image={image} alt={`Attached image ${index + 1}`} />
@@ -107,7 +115,7 @@ function UserMessageView({ message }: { message: UserMessage }) {
         </div>
       )}
       {text && (
-        <div className="rounded-lg bg-neutral-100 px-2.5 py-1.5 whitespace-pre-wrap dark:bg-neutral-800">
+        <div className="rounded-lg rounded-br-sm bg-muted px-2.5 py-1.5 whitespace-pre-wrap">
           {text}
         </div>
       )}
@@ -163,7 +171,7 @@ function AssistantMessageView({
         <ErrorNote text={message.errorMessage ?? "The model request failed."} />
       )}
       {message.stopReason === "aborted" && (
-        <span className="text-[12px] text-neutral-500">Stopped</span>
+        <span className="text-small text-muted-foreground">Stopped</span>
       )}
     </div>
   );
@@ -171,17 +179,19 @@ function AssistantMessageView({
 
 function CompactionDivider({ summary }: { summary: string }) {
   return (
-    <details className="group text-[12px] text-neutral-500 dark:text-neutral-400">
-      <summary className="flex cursor-pointer list-none items-center gap-2 select-none hover:text-neutral-700 dark:hover:text-neutral-200 [&::-webkit-details-marker]:hidden">
-        <span className="h-px flex-1 bg-neutral-200 dark:bg-neutral-700" />
+    <Collapsible className="text-small text-muted-foreground">
+      <CollapsibleTrigger className="group flex w-full cursor-default items-center gap-2 rounded-sm select-none hover:text-foreground">
+        <span className="h-px flex-1 bg-border" />
         Earlier conversation summarized
-        <ChevronRight size={13} className="transition-transform group-open:rotate-90" />
-        <span className="h-px flex-1 bg-neutral-200 dark:bg-neutral-700" />
-      </summary>
-      <div className="mt-2 rounded-md bg-neutral-50 p-2 text-neutral-700 dark:bg-neutral-800/60 dark:text-neutral-300">
-        <Markdown text={summary} />
-      </div>
-    </details>
+        <ChevronRight size={13} className={disclosureChevron} />
+        <span className="h-px flex-1 bg-border" />
+      </CollapsibleTrigger>
+      <CollapsibleContent>
+        <div className="mt-2 rounded-md bg-muted p-2 text-foreground">
+          <Markdown text={summary} />
+        </div>
+      </CollapsibleContent>
+    </Collapsible>
   );
 }
 
@@ -195,15 +205,17 @@ function Thinking({
   active: boolean;
 }) {
   return (
-    <details className="group text-[12px] text-neutral-500 dark:text-neutral-400">
-      <summary className="flex cursor-pointer list-none items-center gap-1 select-none hover:text-neutral-700 dark:hover:text-neutral-200 [&::-webkit-details-marker]:hidden">
-        <ChevronRight size={13} className="transition-transform group-open:rotate-90" />
+    <Collapsible className="text-small text-muted-foreground">
+      <CollapsibleTrigger className="group flex cursor-default items-center gap-1 rounded-sm select-none hover:text-foreground">
+        <ChevronRight size={13} className={disclosureChevron} />
         {active ? "Thinking…" : "Thought"}
-      </summary>
-      <div className="mt-1 border-l-2 border-neutral-200 pl-2.5 whitespace-pre-wrap dark:border-neutral-700">
-        {redacted ? "Hidden by the provider." : text}
-      </div>
-    </details>
+      </CollapsibleTrigger>
+      <CollapsibleContent>
+        <div className="mt-1 ml-1.5 border-l-2 pl-2.5 whitespace-pre-wrap">
+          {redacted ? "Hidden by the provider." : text}
+        </div>
+      </CollapsibleContent>
+    </Collapsible>
   );
 }
 
@@ -211,7 +223,7 @@ function ErrorNote({ text }: { text: string }) {
   return (
     <div
       role="alert"
-      className="flex items-start gap-2 rounded-md bg-red-50 p-2 text-[12px] text-red-800 dark:bg-red-950/60 dark:text-red-300"
+      className="flex items-start gap-2 rounded-md bg-danger-subtle p-2 text-small text-danger"
     >
       <TriangleAlert size={14} className="mt-0.5 shrink-0" />
       <span className="min-w-0 break-words">{text}</span>

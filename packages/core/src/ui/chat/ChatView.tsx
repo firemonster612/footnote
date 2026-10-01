@@ -1,7 +1,9 @@
 import { X } from "lucide-react";
 import { useState, type DragEvent } from "react";
 import type { ChatSession, ModelInfo, UndoReport } from "../../contracts.ts";
+import { IconButton } from "../components/icon-button.tsx";
 import { errorMessage, useSessionState } from "../hooks.ts";
+import { cn } from "../lib/utils.ts";
 import { Composer } from "./Composer.tsx";
 import { MessageList, type ToolIndex } from "./MessageList.tsx";
 
@@ -67,21 +69,20 @@ export function ChatView({
       {notice && (
         <div
           role={notice.tone === "error" ? "alert" : "status"}
-          className={`mx-2 flex items-start gap-2 rounded-md px-2 py-1.5 text-[12px] whitespace-pre-line ${
+          className={cn(
+            "mx-2 flex items-start gap-2 rounded-md py-1 pr-1 pl-2.5 text-small whitespace-pre-line",
             notice.tone === "error"
-              ? "bg-red-50 text-red-800 dark:bg-red-950/60 dark:text-red-300"
-              : "bg-neutral-100 text-neutral-700 dark:bg-neutral-800 dark:text-neutral-300"
-          }`}
+              ? "bg-danger-subtle text-danger"
+              : "bg-muted text-muted-foreground",
+          )}
         >
-          <span className="min-w-0 flex-1">{notice.text}</span>
-          <button
-            type="button"
-            aria-label="Dismiss"
+          <span className="min-w-0 flex-1 py-1">{notice.text}</span>
+          <IconButton
+            icon={X}
+            label="Dismiss"
             onClick={() => setNotice(undefined)}
-            className="shrink-0 opacity-70 hover:opacity-100"
-          >
-            <X size={14} />
-          </button>
+            className="size-6 text-current [&_svg]:size-3.5"
+          />
         </div>
       )}
       <Composer
@@ -93,7 +94,7 @@ export function ChatView({
         onSendError={showError}
       />
       {dragging && (
-        <div className="pointer-events-none absolute inset-2 flex items-center justify-center rounded-lg border-2 border-dashed border-accent bg-white/85 text-accent-fg dark:bg-neutral-900/85">
+        <div className="pointer-events-none absolute inset-2 flex items-center justify-center rounded-lg border-2 border-dashed border-accent bg-background/90 font-medium text-accent-text">
           Drop files to attach
         </div>
       )}

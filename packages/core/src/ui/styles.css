@@ -3,32 +3,198 @@
 /* Shells import this file from elsewhere; scan the UI sources it styles. */
 @source "./";
 
-@theme {
-  --font-sans: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
-  --color-accent: #0f766e;
-  --color-accent-hover: #115e59;
-  --color-accent-fg: #0f766e;
+/*
+ * Footnote design tokens. Neutrals follow Office's Fluent greys so the panel sits quietly
+ * next to the document; teal (#0F766E, the logo) is the only accent.
+ */
+:root {
+  color-scheme: light dark;
+
+  --background: #ffffff;
+  --foreground: #242424;
+  --muted: #f5f5f5;
+  --muted-foreground: #646464;
+  --subtle-foreground: #8a8a8a;
+  --border: #e3e3e3;
+  --input: #d1d1d1;
+  --input-hover: #b8b8b8;
+  --popover: #ffffff;
+  --highlight: #efefef;
+  --pressed: #e3e3e3;
+  --ring: #0f766e;
+
+  --accent: #0f766e;
+  --accent-hover: #0d6961;
+  --accent-pressed: #0b5a53;
+  --accent-foreground: #ffffff;
+  --accent-text: #0f766e;
+  --accent-subtle: #e7f3f2;
+
+  --danger: #b42318;
+  --danger-subtle: #fdf0ef;
+  --warning: #9a5b00;
+  --warning-subtle: #fdf6e7;
+  --warning-border: #ecd3a0;
+
+  --radius: 6px;
+  --shadow-control: 0 1px 1px rgb(0 0 0 / 0.04);
+  --shadow-menu:
+    0 0 0 1px rgb(0 0 0 / 0.06), 0 8px 20px -6px rgb(0 0 0 / 0.16), 0 2px 6px -2px rgb(0 0 0 / 0.08);
+  --shadow-thumb: 0 0 0 1px rgb(0 0 0 / 0.06), 0 1px 2px rgb(0 0 0 / 0.1);
 }
 
 @media (prefers-color-scheme: dark) {
   :root {
-    --color-accent-fg: #2dd4bf;
+    --background: #1f1f1f;
+    --foreground: #ececec;
+    --muted: #292929;
+    --muted-foreground: #a8a8a8;
+    --subtle-foreground: #7f7f7f;
+    --border: #333333;
+    --input: #474747;
+    --input-hover: #5c5c5c;
+    --popover: #2b2b2b;
+    --highlight: #383838;
+    --pressed: #424242;
+    --ring: #2dd4bf;
+
+    --accent: #0f766e;
+    --accent-hover: #11847b;
+    --accent-pressed: #0d6961;
+    --accent-foreground: #ffffff;
+    --accent-text: #2dd4bf;
+    --accent-subtle: #163a37;
+
+    --danger: #f28b82;
+    --danger-subtle: #3a1f1d;
+    --warning: #f5c26b;
+    --warning-subtle: #33291a;
+    --warning-border: #5c4520;
+
+    --shadow-control: none;
+    --shadow-menu:
+      0 0 0 1px rgb(255 255 255 / 0.06), 0 10px 24px -6px rgb(0 0 0 / 0.6),
+      0 2px 6px -2px rgb(0 0 0 / 0.4);
+    --shadow-thumb: 0 0 0 1px rgb(255 255 255 / 0.06), 0 1px 2px rgb(0 0 0 / 0.5);
+  }
+}
+
+@theme inline {
+  --font-sans: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
+
+  /* Type scale for a 320-480px panel. */
+  --text-caption: 11px;
+  --text-caption--line-height: 14px;
+  --text-small: 12px;
+  --text-small--line-height: 16px;
+  --text-body: 13px;
+  --text-body--line-height: 20px;
+  --text-title: 15px;
+  --text-title--line-height: 20px;
+
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-subtle-foreground: var(--subtle-foreground);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-input-hover: var(--input-hover);
+  --color-popover: var(--popover);
+  --color-highlight: var(--highlight);
+  --color-pressed: var(--pressed);
+  --color-ring: var(--ring);
+  --color-accent: var(--accent);
+  --color-accent-hover: var(--accent-hover);
+  --color-accent-pressed: var(--accent-pressed);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-accent-text: var(--accent-text);
+  --color-accent-subtle: var(--accent-subtle);
+  --color-danger: var(--danger);
+  --color-danger-subtle: var(--danger-subtle);
+  --color-warning: var(--warning);
+  --color-warning-subtle: var(--warning-subtle);
+  --color-warning-border: var(--warning-border);
+
+  --radius-sm: calc(var(--radius) - 2px);
+  --radius-md: var(--radius);
+  --radius-lg: calc(var(--radius) + 2px);
+
+  --shadow-control: var(--shadow-control);
+  --shadow-menu: var(--shadow-menu);
+  --shadow-thumb: var(--shadow-thumb);
+}
+
+@theme {
+  --animate-menu-in: menu-in 120ms cubic-bezier(0.2, 0, 0, 1);
+  --animate-menu-out: menu-out 90ms ease-in;
+  --animate-collapsible-down: collapsible-down 160ms cubic-bezier(0.2, 0, 0, 1);
+  --animate-collapsible-up: collapsible-up 120ms ease-in;
+}
+
+/* Reduced motion: overlays and disclosures appear without animating; transitions jump. */
+@media (prefers-reduced-motion: reduce) {
+  :root {
+    --animate-menu-in: none;
+    --animate-menu-out: none;
+    --animate-collapsible-down: none;
+    --animate-collapsible-up: none;
+  }
+}
+
+@keyframes menu-in {
+  from {
+    opacity: 0;
+    transform: translateY(-2px) scale(0.98);
+  }
+}
+@keyframes menu-out {
+  to {
+    opacity: 0;
+    transform: scale(0.98);
+  }
+}
+@keyframes collapsible-down {
+  from {
+    height: 0;
+    opacity: 0;
+  }
+  to {
+    height: var(--radix-collapsible-content-height);
+  }
+}
+@keyframes collapsible-up {
+  from {
+    height: var(--radix-collapsible-content-height);
+  }
+  to {
+    height: 0;
+    opacity: 0;
   }
 }
 
 @layer base {
-  :root {
-    color-scheme: light dark;
-  }
   html,
   body,
   #root {
     height: 100%;
   }
   body {
-    @apply bg-white text-[13px] leading-5 text-neutral-900 antialiased dark:bg-neutral-900 dark:text-neutral-100;
+    @apply bg-background text-body text-foreground antialiased;
+  }
+  *,
+  ::before,
+  ::after {
+    @apply border-border;
   }
   :focus-visible {
-    @apply outline-2 outline-offset-1 outline-accent;
+    @apply outline-2 outline-offset-1 outline-ring;
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *,
+    ::before,
+    ::after {
+      transition-duration: 0s !important;
+    }
   }
 }

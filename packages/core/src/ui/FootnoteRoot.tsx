@@ -9,7 +9,9 @@ import { useCallback, useEffect, useMemo, useState } from "react";
 import type { AttachmentStore, ChatSession, FootnoteApp, OfficeHostStatus } from "../contracts.ts";
 import type { ToolIndex } from "./chat/MessageList.tsx";
 import { ChatView } from "./chat/ChatView.tsx";
-import { Button, IconButton } from "./components/controls.tsx";
+import { Button } from "./components/button.tsx";
+import { IconButton } from "./components/icon-button.tsx";
+import { TooltipProvider } from "./components/tooltip.tsx";
 import { HistoryView } from "./HistoryView.tsx";
 import { errorMessage, useHostStatus, useModels, useSettings } from "./hooks.ts";
 import { EndpointSection } from "./settings/EndpointSection.tsx";
@@ -61,78 +63,86 @@ export function FootnoteRoot({ app }: { app: FootnoteApp }) {
   }
 
   return (
-    <div className="flex h-full min-h-0 flex-col">
-      <header className="flex h-10 shrink-0 items-center gap-1 border-b border-neutral-200 px-2 dark:border-neutral-800">
-        {view === "settings" || view === "history" ? (
-          <IconButton
-            icon={ArrowLeft}
-            label="Back to chat"
-            onClick={view === "history" ? leaveHistory : () => setView("chat")}
-          />
-        ) : (
-          <LogoMark />
-        )}
-        <span className="min-w-0 flex-1 truncate px-1 font-medium">
-          {viewTitles[view] ?? lastDocument?.name ?? "Footnote"}
-        </span>
-        {view !== "setup" && (
-          <>
+    <TooltipProvider>
+      <div className="flex h-full min-h-0 flex-col">
+        <header className="flex h-10 shrink-0 items-center gap-0.5 border-b px-2">
+          {view === "settings" || view === "history" ? (
             <IconButton
-              icon={MessageSquarePlus}
-              label="New chat"
-              onClick={newChat}
-              disabled={!documentId}
+              icon={ArrowLeft}
+              label="Back to chat"
+              onClick={view === "history" ? leaveHistory : () => setView("chat")}
             />
-            <IconButton
-              icon={Clock}
-              label="Chats"
-              onClick={() => setView("history")}
-              disabled={!documentId}
-            />
-            <IconButton icon={SettingsIcon} label="Settings" onClick={() => setView("settings")} />
-          </>
-        )}
-      </header>
-      {status && !status.connected && <ConnectionBanner status={status} />}
-      {view === "setup" && (
-        <div className="flex flex-col gap-3 overflow-y-auto p-3">
-          <EndpointSection app={app} settings={settings} modelList={modelList} />
-          <Button
-            variant="primary"
-            className="self-start"
-            disabled={modelList.models.length === 0}
-            onClick={() => setView("chat")}
-          >
-            Continue
-          </Button>
-        </div>
-      )}
-      {view === "settings" && <SettingsView app={app} settings={settings} modelList={modelList} />}
-      {view === "history" && documentId && (
-        <HistoryView
-          app={app}
-          documentId={documentId}
-          currentChatId={session?.getState().id}
-          onOpen={(chatId) =>
-            void loadSession(() => app.chats.open(chatId)).then(() => setView("chat"))
-          }
-          onDelete={deleteChat}
-        />
-      )}
-      {view === "chat" &&
-        (session ? (
-          <ChatView
-            key={session.getState().id}
-            session={session}
-            models={modelList.models}
-            tools={tools}
-          />
-        ) : (
-          <div className="flex flex-1 items-center justify-center p-6 text-center text-neutral-500">
-            {chatError}
+          ) : (
+            <LogoMark />
+          )}
+          <span className="min-w-0 flex-1 truncate px-1.5 font-semibold">
+            {viewTitles[view] ?? lastDocument?.name ?? "Footnote"}
+          </span>
+          {view !== "setup" && (
+            <>
+              <IconButton
+                icon={MessageSquarePlus}
+                label="New chat"
+                onClick={newChat}
+                disabled={!documentId}
+              />
+              <IconButton
+                icon={Clock}
+                label="Chats"
+                onClick={() => setView("history")}
+                disabled={!documentId}
+              />
+              <IconButton
+                icon={SettingsIcon}
+                label="Settings"
+                onClick={() => setView("settings")}
+              />
+            </>
+          )}
+        </header>
+        {status && !status.connected && <ConnectionBanner status={status} />}
+        {view === "setup" && (
+          <div className="flex flex-col gap-3 overflow-y-auto p-3">
+            <EndpointSection app={app} settings={settings} modelList={modelList} />
+            <Button
+              variant="primary"
+              className="self-start"
+              disabled={modelList.models.length === 0}
+              onClick={() => setView("chat")}
+            >
+              Continue
+            </Button>
           </div>
-        ))}
-    </div>
+        )}
+        {view === "settings" && (
+          <SettingsView app={app} settings={settings} modelList={modelList} />
+        )}
+        {view === "history" && documentId && (
+          <HistoryView
+            app={app}
+            documentId={documentId}
+            currentChatId={session?.getState().id}
+            onOpen={(chatId) =>
+              void loadSession(() => app.chats.open(chatId)).then(() => setView("chat"))
+            }
+            onDelete={deleteChat}
+          />
+        )}
+        {view === "chat" &&
+          (session ? (
+            <ChatView
+              key={session.getState().id}
+              session={session}
+              models={modelList.models}
+              tools={tools}
+            />
+          ) : (
+            <div className="flex flex-1 items-center justify-center p-6 text-center text-muted-foreground">
+              {chatError}
+            </div>
+          ))}
+      </div>
+    </TooltipProvider>
   );
 }
 
@@ -172,7 +182,7 @@ function ConnectionBanner({ status }: { status: OfficeHostStatus }) {
   return (
     <div
       role="status"
-      className="flex items-center gap-2 border-b border-amber-200 bg-amber-50 px-3 py-1.5 text-[12px] text-amber-900 dark:border-amber-900 dark:bg-amber-950/50 dark:text-amber-200"
+      className="flex items-center gap-2 border-b border-warning-border bg-warning-subtle px-3 py-1.5 text-small text-warning"
     >
       <Unplug size={14} className="shrink-0" />
       <span className="min-w-0">{status.reason ?? "Not connected to an Office document"}</span>

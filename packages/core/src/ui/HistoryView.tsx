@@ -1,7 +1,9 @@
 import { Trash } from "lucide-react";
 import { useEffect, useState } from "react";
 import type { ChatSummary, FootnoteApp } from "../contracts.ts";
-import { Button } from "./components/controls.tsx";
+import { Button } from "./components/button.tsx";
+import { HighlightGroup, highlightItem } from "./components/highlight-group.tsx";
+import { IconButton } from "./components/icon-button.tsx";
 import { errorMessage } from "./hooks.ts";
 
 const relativeTime = new Intl.RelativeTimeFormat(undefined, { numeric: "auto" });
@@ -46,50 +48,54 @@ export function HistoryView({
 
   return (
     <div className="flex min-h-0 flex-1 flex-col">
-      {error && <p className="px-3 pt-2 text-[12px] text-red-700 dark:text-red-400">{error}</p>}
+      {error && <p className="px-3 pt-2 text-small text-danger">{error}</p>}
       {chats?.length === 0 && (
-        <p className="px-3 pt-2 text-neutral-500">No chats for this document yet.</p>
+        <p className="px-3 pt-2 text-muted-foreground">No chats for this document yet.</p>
       )}
-      <ul className="min-h-0 flex-1 overflow-y-auto px-1.5 py-2">
-        {chats?.map((chat) => (
-          <li
-            key={chat.id}
-            className="group flex items-center gap-1 rounded-md hover:bg-neutral-100 dark:hover:bg-neutral-800"
-          >
-            <button
-              type="button"
-              onClick={() => onOpen(chat.id)}
-              aria-current={chat.id === currentChatId}
-              className="flex min-w-0 flex-1 flex-col items-start px-1.5 py-1.5 text-left aria-[current=true]:font-semibold"
-            >
-              <span className="w-full truncate">{chat.title || "Untitled chat"}</span>
-              <span className="text-[11px] font-normal text-neutral-500">
-                {formatAge(chat.updatedAt)}
-              </span>
-            </button>
-            {confirmingId === chat.id ? (
-              <Button
-                variant="danger"
-                className="mr-1"
-                autoFocus
-                onBlur={() => setConfirmingId(undefined)}
-                onClick={() => remove(chat.id)}
+      <div className="min-h-0 flex-1 overflow-y-auto px-1.5 py-1.5">
+        <HighlightGroup>
+          <ul className="flex flex-col gap-px">
+            {chats?.map((chat) => (
+              <li
+                key={chat.id}
+                {...highlightItem}
+                className="group flex items-center gap-1 rounded-sm pr-1"
               >
-                Delete
-              </Button>
-            ) : (
-              <button
-                type="button"
-                aria-label={`Delete ${chat.title || "chat"}`}
-                onClick={() => setConfirmingId(chat.id)}
-                className="mr-1 rounded p-1.5 text-neutral-500 opacity-0 group-hover:opacity-100 hover:bg-neutral-200 hover:text-red-700 focus-visible:opacity-100 dark:hover:bg-neutral-700"
-              >
-                <Trash size={14} />
-              </button>
-            )}
-          </li>
-        ))}
-      </ul>
+                <button
+                  type="button"
+                  onClick={() => onOpen(chat.id)}
+                  aria-current={chat.id === currentChatId}
+                  className="group/open flex min-w-0 flex-1 cursor-default flex-col items-start rounded-sm px-2 py-1.5 text-left focus-visible:outline-offset-[-2px]"
+                >
+                  <span className="w-full truncate group-aria-[current=true]/open:font-semibold group-aria-[current=true]/open:text-accent-text">
+                    {chat.title || "Untitled chat"}
+                  </span>
+                  <span className="text-caption text-subtle-foreground">
+                    {formatAge(chat.updatedAt)}
+                  </span>
+                </button>
+                {confirmingId === chat.id ? (
+                  <Button
+                    variant="danger"
+                    autoFocus
+                    onBlur={() => setConfirmingId(undefined)}
+                    onClick={() => remove(chat.id)}
+                  >
+                    Delete
+                  </Button>
+                ) : (
+                  <IconButton
+                    icon={Trash}
+                    label={`Delete ${chat.title || "chat"}`}
+                    onClick={() => setConfirmingId(chat.id)}
+                    className="opacity-0 group-hover:opacity-100 hover:bg-pressed hover:text-danger focus-visible:opacity-100"
+                  />
+                )}
+              </li>
+            ))}
+          </ul>
+        </HighlightGroup>
+      </div>
     </div>
   );
 }
