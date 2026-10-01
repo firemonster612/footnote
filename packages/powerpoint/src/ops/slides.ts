@@ -1,4 +1,11 @@
-import { findSlide, loadSlides, readBackFailureWarning, requireApi, slideIds } from "./presentation.ts";
+import {
+  findSlide,
+  loadSlides,
+  moveSelectionOff,
+  readBackFailureWarning,
+  requireApi,
+  slideIds,
+} from "./presentation.ts";
 import { readOutlines } from "./read.ts";
 import type { InsertFormatting, WriteReceipt } from "./types.ts";
 
@@ -119,6 +126,7 @@ export const slideOps = {
         throw new Error(
           `Slides not found: ${missing.join(", ")}. Use slide IDs from <deck_state> or get_deck.`,
         );
+      await moveSelectionOff(context, ids);
       for (const id of ids) context.presentation.slides.getItem(id).delete();
       await context.sync();
       return slideReceipt(context, ids, { deletedSlideIds: ids });
@@ -178,16 +186,18 @@ export const slideOps = {
   }) =>
     PowerPoint.run(async (context) => {
       requireApi("1.8", "Undo");
-      const existing = new Set(await slideIds(context));
-      const toDelete = deleteSlideIds.filter((id) => existing.has(id));
-      for (const id of toDelete) context.presentation.slides.getItem(id).delete();
-      await context.sync();
-
+      const existing = await slideIds(context);
+      const toDelete = deleteSlideIds.filter((id) => existing.includes(id));
+      // Insert the saved copies before deleting anything: deleting the on-screen slide first crashes PowerPoint
+      // for the web. A copy goes right after the slide it replaces, or at its old position among the slides that stay.
       const restoredIds: string[] = [];
       const idMap: Record<string, string> = {};
       for (const { slideId, base64, index } of [...inserts].sort((a, b) => a.index - b.index)) {
         const ids = await slideIds(context);
-        const targetSlideId = ids[Math.min(index, ids.length) - 1];
+        const staying = ids.filter((id) => !toDelete.includes(id));
+        const targetSlideId = ids.includes(slideId)
+          ? slideId
+          : staying[Math.min(index, staying.length) - 1];
         const created = await insertSlides(context, {
           base64,
           formatting: "KeepSourceFormatting",
@@ -196,6 +206,9 @@ export const slideOps = {
         restoredIds.push(...created);
         if (created[0]) idMap[slideId] = created[0];
       }
+      await moveSelectionOff(context, toDelete, restoredIds[0]);
+      for (const id of toDelete) context.presentation.slides.getItem(id).delete();
+      await context.sync();
       return { removedSlideIds: toDelete, restoredSlideIds: restoredIds, idMap };
     }),
 };

@@ -57,9 +57,33 @@ export async function findShape(
 export function readBackFailureWarning(error: unknown): string {
   const detail =
     error instanceof OfficeExtension.Error
-      ? describeOfficeError({ message: error.message, code: error.code, debugInfo: error.debugInfo })
+      ? describeOfficeError({
+          message: error.message,
+          code: error.code,
+          debugInfo: error.debugInfo,
+        })
       : error instanceof Error
         ? error.message
         : String(error);
   return `The write was applied, but reading it back failed (${detail}). Call get_slide before editing the affected slides again; do not repeat the write.`;
+}
+
+/**
+ * PowerPoint for the web crashes its editor ("Sorry, we ran into a problem") when the API deletes the slide that's
+ * open on screen. Select a slide that's staying before deleting.
+ */
+export async function moveSelectionOff(
+  context: PowerPoint.RequestContext,
+  deleting: string[],
+  preferredId?: string,
+): Promise<void> {
+  if (deleting.length === 0 || !supportsApi("1.5")) return;
+  const slides = context.presentation.slides;
+  slides.load("items/id");
+  await context.sync();
+  const staying = slides.items.map((slide) => slide.id).filter((id) => !deleting.includes(id));
+  const target = preferredId && staying.includes(preferredId) ? preferredId : staying[0];
+  if (!target) return;
+  context.presentation.setSelectedSlides([target]);
+  await context.sync();
 }
