@@ -302,3 +302,33 @@ describe("queued messages", () => {
     expect(state.queuedMessages.map((message) => message.text)).toEqual(["Later"]);
   });
 });
+
+describe("revert", () => {
+  it("undoes the request's turn and every later one, drops them from the chat, and returns the text", async () => {
+    const harness = sessionHarness();
+    harness.faux.setResponses([
+      fauxAssistantMessage("One."),
+      fauxAssistantMessage("Two."),
+      fauxAssistantMessage("Three."),
+    ]);
+    const session = harness.open(newChatRecord());
+    await session.send("First request");
+    await session.send("Second request");
+    await session.send("Third request");
+    const requests = session.getState().messages.filter((message) => message.role === "user");
+
+    const { text } = await session.revertTo(requests[1]!.timestamp);
+
+    expect(text).toBe("Second request");
+    expect(harness.undoneTurnIds).toEqual([harness.turns.slice(1)]);
+    const remaining = session.getState().messages;
+    expect(remaining.filter((message) => message.role === "user")).toHaveLength(1);
+    expect(remaining.at(-1)?.role).toBe("assistant");
+
+    // The next send starts fresh from there, and a later revert doesn't touch the reverted turns again.
+    await session.send("Replacement");
+    const replacement = session.getState().messages.findLast((message) => message.role === "user")!;
+    await session.revertTo(replacement.timestamp);
+    expect(harness.undoneTurnIds.at(-1)).toEqual([harness.turns.at(-1)]);
+  });
+});

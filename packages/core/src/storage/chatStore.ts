@@ -14,6 +14,13 @@ export interface ChatRecord extends ChatSummary {
   writesAllowed: boolean;
   modelId?: string;
   thinkingLevel: ThinkingLevel;
+  /** Requests that started a turn (by message timestamp) and that turn's undo ID. Absent in chats saved before revert existed. */
+  turnStarts?: TurnStart[];
+}
+
+export interface TurnStart {
+  messageTimestamp: number;
+  turnId: string;
 }
 
 export interface ChatStore {

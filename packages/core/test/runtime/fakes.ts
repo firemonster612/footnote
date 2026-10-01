@@ -41,6 +41,7 @@ export function fakeHostModule(options: { readResultChars?: number } = {}) {
   let version = 0;
   const contextCalls: number[] = [];
   const turns: string[] = [];
+  const undoneTurnIds: string[][] = [];
   const hostModule: HostModule = {
     kind: "powerpoint",
     ops: {},
@@ -58,10 +59,14 @@ export function fakeHostModule(options: { readResultChars?: number } = {}) {
       beginTurn: (_chatId, turnId) => void turns.push(turnId),
       canUndo: () => turns.length > 0,
       undoLastTurn: async () => ({ restored: 1, removed: 0, warnings: [] }),
+      undoTurns: async (_env, _chatId, turnIds) => {
+        undoneTurnIds.push(turnIds);
+        return { restored: turnIds.length, removed: 0, warnings: [] };
+      },
     },
     skills: [],
   };
-  return { hostModule, contextCalls, turns };
+  return { hostModule, contextCalls, turns, undoneTurnIds };
 }
 
 export function fakeSettings(): SettingsHandle {

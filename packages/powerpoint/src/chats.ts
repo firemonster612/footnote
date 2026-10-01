@@ -19,6 +19,8 @@ export interface ChatState {
   lastOutline?: SlideOutline[];
   lastThemeKey?: string;
   turns: Turn[];
+  /** Every turn begun in this panel session, so a revert can tell "made no changes" from "checkpoints lost on reload". */
+  seenTurnIds: Set<string>;
 }
 
 export const turnHasChanges = (turn: Turn): boolean =>
@@ -48,7 +50,7 @@ export function createChatRegistry(): ChatRegistry {
   function get(chatId: string): ChatState {
     let chat = chats.get(chatId);
     if (!chat) {
-      chat = { observed: new Map(), turns: [] };
+      chat = { observed: new Map(), turns: [], seenTurnIds: new Set() };
       chats.set(chatId, chat);
     }
     return chat;
@@ -65,6 +67,7 @@ export function createChatRegistry(): ChatRegistry {
     beginTurn(chatId: string, turnId: string): void {
       activeChatId = chatId;
       const chat = get(chatId);
+      chat.seenTurnIds.add(turnId);
       chat.turns = [
         ...chat.turns.filter(turnHasChanges).slice(-(MAX_UNDO_TURNS - 1)),
         newTurn(turnId),

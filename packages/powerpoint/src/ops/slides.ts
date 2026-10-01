@@ -174,7 +174,7 @@ export const slideOps = {
     inserts,
   }: {
     deleteSlideIds: string[];
-    inserts: { base64: string; index: number }[];
+    inserts: { slideId: string; base64: string; index: number }[];
   }) =>
     PowerPoint.run(async (context) => {
       requireApi("1.8", "Undo");
@@ -184,7 +184,8 @@ export const slideOps = {
       await context.sync();
 
       const restoredIds: string[] = [];
-      for (const { base64, index } of [...inserts].sort((a, b) => a.index - b.index)) {
+      const idMap: Record<string, string> = {};
+      for (const { slideId, base64, index } of [...inserts].sort((a, b) => a.index - b.index)) {
         const ids = await slideIds(context);
         const targetSlideId = ids[Math.min(index, ids.length) - 1];
         const created = await insertSlides(context, {
@@ -193,7 +194,8 @@ export const slideOps = {
           ...(targetSlideId && { targetSlideId }),
         });
         restoredIds.push(...created);
+        if (created[0]) idMap[slideId] = created[0];
       }
-      return { removedSlideIds: toDelete, restoredSlideIds: restoredIds };
+      return { removedSlideIds: toDelete, restoredSlideIds: restoredIds, idMap };
     }),
 };

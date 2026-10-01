@@ -10,6 +10,7 @@ import {
   disclosureChevron,
 } from "../components/collapsible.tsx";
 import { ImageThumbnail } from "../components/ImageThumbnail.tsx";
+import { MessageActions } from "./MessageActions.tsx";
 import { Markdown } from "../markdown/Markdown.tsx";
 import { ApprovalCard } from "./ApprovalCard.tsx";
 import { ToolCard } from "./ToolCard.tsx";
@@ -24,10 +25,12 @@ export function MessageList({
   state,
   session,
   tools,
+  onRevert,
 }: {
   state: ChatSessionState;
   session: ChatSession;
   tools: ToolIndex;
+  onRevert: (messageTimestamp: number) => void;
 }) {
   const results = useMemo(() => indexToolResults(state.messages), [state.messages]);
   const scrollRef = useRef<HTMLDivElement>(null);
@@ -41,7 +44,16 @@ export function MessageList({
   const renderMessage = (message: AgentMessage, key: string | number, streaming = false) => {
     switch (message.role) {
       case "user":
-        return <UserMessageView key={key} message={message} />;
+        return (
+          <UserMessageView
+            key={key}
+            message={message}
+            {...(state.revertibleRequests.includes(message.timestamp) && {
+              onRevert: () => onRevert(message.timestamp),
+            })}
+            {...(state.isStreaming && { revertBlockedReason: "Stop the response to revert" })}
+          />
+        );
       case "assistant":
         return (
           <AssistantMessageView
@@ -100,10 +112,18 @@ function WorkingIndicator() {
   );
 }
 
-function UserMessageView({ message }: { message: UserMessage }) {
+function UserMessageView({
+  message,
+  onRevert,
+  revertBlockedReason,
+}: {
+  message: UserMessage;
+  onRevert?: () => void;
+  revertBlockedReason?: string;
+}) {
   const { text, attachmentNames, images } = splitUserContent(message.content);
   return (
-    <div className="ml-8 flex flex-col items-end gap-1.5 self-end">
+    <div className="group ml-8 flex flex-col items-end gap-1.5 self-end">
       {(attachmentNames.length > 0 || images.length > 0) && (
         <div className="flex flex-wrap items-center justify-end gap-1.5">
           {attachmentNames.map((name, index) => (
@@ -122,6 +142,12 @@ function UserMessageView({ message }: { message: UserMessage }) {
           {text}
         </div>
       )}
+      <MessageActions
+        text={text}
+        align="end"
+        {...(onRevert && { onRevert })}
+        {...(revertBlockedReason && { revertBlockedReason })}
+      />
     </div>
   );
 }
@@ -139,8 +165,11 @@ function AssistantMessageView({
   results: Map<string, ToolResultMessage>;
   tools: ToolIndex;
 }) {
+  const replyText = message.content
+    .flatMap((part) => (part.type === "text" && part.text.trim() ? [part.text] : []))
+    .join("\n\n");
   return (
-    <div className="flex flex-col gap-2">
+    <div className="group flex flex-col gap-2">
       {message.content.map((part, index) => {
         switch (part.type) {
           case "text":
@@ -176,6 +205,7 @@ function AssistantMessageView({
       {message.stopReason === "aborted" && (
         <span className="text-small text-muted-foreground">Stopped</span>
       )}
+      {!streaming && replyText && <MessageActions text={replyText} align="start" />}
     </div>
   );
 }

@@ -208,6 +208,7 @@ const fakeHostModule: HostModule = {
     beginTurn: () => {},
     canUndo: () => false,
     undoLastTurn: async () => ({ restored: 0, removed: 0, warnings: [] }),
+    undoTurns: async () => ({ restored: 0, removed: 0, warnings: [] }),
   },
   skills: [],
 };
@@ -239,8 +240,10 @@ class FakeChatSession implements ChatSession {
           text: `<attachment id="${attachment.id}" name="${attachment.name}">…</attachment>`,
         }) as const,
     );
+    const request = userMessage([{ type: "text", text }, ...attachments]);
     this.update({
-      messages: [...this.state.messages, userMessage([{ type: "text", text }, ...attachments])],
+      messages: [...this.state.messages, request],
+      revertibleRequests: [...this.state.revertibleRequests, request.timestamp],
       title: this.state.messages.length === 0 ? text.slice(0, 60) : this.state.title,
       stagedAttachments: [],
       isStreaming: true,
@@ -251,6 +254,25 @@ class FakeChatSession implements ChatSession {
 
   steer(text: string) {
     this.update({ messages: [...this.state.messages, userMessage([{ type: "text", text }])] });
+  }
+
+  async revertTo(messageTimestamp: number) {
+    const index = this.state.messages.findIndex(
+      (message) => message.role === "user" && message.timestamp === messageTimestamp,
+    );
+    const request = this.state.messages[index];
+    if (!request || request.role !== "user")
+      throw new Error("That message is no longer in this chat.");
+    this.update({
+      messages: this.state.messages.slice(0, index),
+      revertibleRequests: this.state.revertibleRequests.filter((at) => at < messageTimestamp),
+      canUndo: false,
+    });
+    const first =
+      typeof request.content === "string"
+        ? request.content
+        : request.content.find((block) => block.type === "text")?.text;
+    return { text: first ?? "", undo: { restored: 2, removed: 1, warnings: [] } };
   }
 
   queue(text: string) {
@@ -433,6 +455,7 @@ function emptyState(id: string, settings: Settings): ChatSessionState {
     thinkingLevel: settings.thinkingLevel,
     stagedAttachments: [],
     queuedMessages: [],
+    revertibleRequests: [],
     canUndo: false,
   };
 }
@@ -562,6 +585,9 @@ function demoState(): ChatSessionState {
     id: "chat-demo",
     title: "Tighten slide 3",
     messages,
+    revertibleRequests: messages.flatMap((message) =>
+      message.role === "user" ? [message.timestamp] : [],
+    ),
     isStreaming: true,
     pendingApprovals: [
       {

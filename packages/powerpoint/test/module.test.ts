@@ -7,6 +7,7 @@ import type { DeckState, SlideDetail, SlideState, WriteReceipt } from "../src/op
 function fakeEnv(slideIds: string[]) {
   const fingerprints = new Map(slideIds.map((id) => [id, "v1"]));
   const calls: { op: string; args: any }[] = [];
+  let restores = 0;
   const index = (id: string) => [...fingerprints.keys()].indexOf(id);
 
   const ops: Record<string, (args: any) => unknown> = {
@@ -55,10 +56,23 @@ function fakeEnv(slideIds: string[]) {
         createdSlideIds: ["new"],
       };
     },
-    restore_slides: ({ deleteSlideIds }) => ({
-      removedSlideIds: deleteSlideIds,
-      restoredSlideIds: ["restored"],
-    }),
+    restore_slides: ({
+      deleteSlideIds,
+      inserts,
+    }: {
+      deleteSlideIds: string[];
+      inserts: { slideId: string; base64: string }[];
+    }) => {
+      // Like PowerPoint: deleted slides go away, re-inserted copies get fresh IDs.
+      for (const id of deleteSlideIds) fingerprints.delete(id);
+      const idMap: Record<string, string> = {};
+      for (const { slideId, base64 } of inserts) {
+        restores += 1;
+        idMap[slideId] = `${slideId}~r${restores}`;
+        fingerprints.set(idMap[slideId], base64);
+      }
+      return { removedSlideIds: deleteSlideIds, restoredSlideIds: Object.values(idMap), idMap };
+    },
     get_deck_state: (): DeckState => ({
       deck: {
         slides: [...fingerprints].map(([id, fingerprint], i) => ({
@@ -137,9 +151,30 @@ describe("powerpointModule", () => {
     const report = await module.undo.undoLastTurn(env, "chat");
     expect(calls.at(-1)).toEqual({
       op: "restore_slides",
-      args: { deleteSlideIds: ["s2"], inserts: [{ index: 1, base64: "pptx:s2" }] },
+      args: { deleteSlideIds: ["s2"], inserts: [{ slideId: "s2", index: 1, base64: "pptx:s2" }] },
     });
     expect(report.restored).toBe(1);
+    expect(module.undo.canUndo("chat")).toBe(false);
+  });
+
+  it("undoes several turns on the same slide without leaving duplicate copies", async () => {
+    const module = createPowerPointModule();
+    const { env, fingerprints } = fakeEnv(["s1", "s2"]);
+    module.undo.beginTurn("chat", "t1");
+    const tools = module.createTools(env);
+    await module.getContextBlock(env, "chat");
+    await tool(tools, "get_slide").execute("c1", { slideId: "s2" });
+    await tool(tools, "update_shapes").execute("c2", edit);
+    module.undo.beginTurn("chat", "t2");
+    await tool(tools, "update_shapes").execute("c3", edit);
+
+    const report = await module.undo.undoTurns(env, "chat", ["t1", "t2", "t-from-before-reload"]);
+
+    // t2's restore gives s2 a new ID; t1's undo must replace that copy, not add a second one.
+    expect([...fingerprints.keys()]).toHaveLength(2);
+    expect([...fingerprints.values()]).toContain("pptx:s2");
+    expect(report.restored).toBe(2);
+    expect(report.warnings.join(" ")).toContain("1 earlier turn couldn't be undone");
     expect(module.undo.canUndo("chat")).toBe(false);
   });
 

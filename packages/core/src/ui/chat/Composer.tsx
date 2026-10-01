@@ -10,7 +10,7 @@ import {
   X,
   type LucideIcon,
 } from "lucide-react";
-import { useRef, useState } from "react";
+import { useRef, type RefObject } from "react";
 import type {
   ChatSession,
   ChatSessionState,
@@ -40,6 +40,9 @@ export function Composer({
   onFiles,
   onUndo,
   onSendError,
+  text,
+  onTextChange,
+  textareaRef,
 }: {
   session: ChatSession;
   state: ChatSessionState;
@@ -47,8 +50,12 @@ export function Composer({
   onFiles: (files: File[]) => void;
   onUndo: () => void;
   onSendError: (cause: unknown) => void;
+  /** The draft lives in ChatView so a revert can put the request back here. */
+  text: string;
+  onTextChange: (text: string) => void;
+  textareaRef: RefObject<HTMLTextAreaElement | null>;
 }) {
-  const [text, setText] = useState("");
+  const setText = onTextChange;
   const fileInputRef = useRef<HTMLInputElement>(null);
   const currentModel = models.find((model) => model.id === state.modelId);
   const thinkingLevels = currentModel?.thinkingLevels ?? [state.thinkingLevel];
@@ -104,6 +111,7 @@ export function Composer({
         )}
         <div className="flex flex-col rounded-lg border border-input bg-background shadow-control transition-[border-color,box-shadow] duration-100 hover:border-input-hover has-[textarea:focus]:border-ring has-[textarea:focus]:ring-2 has-[textarea:focus]:ring-ring/20">
           <textarea
+            ref={textareaRef}
             value={text}
             onChange={(event) => setText(event.target.value)}
             onKeyDown={(event) => {

@@ -6,7 +6,7 @@ import type { DeckState } from "./ops/types.ts";
 import { powerpointSkills } from "./skills/index.ts";
 import { powerpointSystemPrompt } from "./systemPrompt.ts";
 import { createPowerPointTools } from "./tools/index.ts";
-import { undoLastTurn } from "./undo.ts";
+import { undoLastTurn, undoTurns } from "./undo.ts";
 import { createWriteGuard } from "./writeGuard.ts";
 
 /** A PowerPoint HostModule with its own chat state. Shells use the shared `powerpointModule`; tests make their own. */
@@ -56,6 +56,7 @@ export function createPowerPointModule(): HostModule {
       beginTurn: chats.beginTurn,
       canUndo: (chatId) => chats.get(chatId).turns.some(turnHasChanges),
       undoLastTurn: (env, chatId) => undoLastTurn(env.host, chats.get(chatId)),
+      undoTurns: (env, chatId, turnIds) => undoTurns(env.host, chats.get(chatId), turnIds),
     },
     skills: powerpointSkills,
   };

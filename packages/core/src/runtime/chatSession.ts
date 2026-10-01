@@ -106,6 +106,15 @@ export function createChatSession({
   let error: string | undefined;
   let stagedIds: string[] = [];
   let queued: { id: string; text: string; attachmentIds: string[] }[] = [];
+  // Chats saved before turn tracking: treat every request as a turn start. Their turn IDs are unknown to the
+  // host, so reverting them reports that the slide changes can't be undone.
+  let turnStarts =
+    record.turnStarts ??
+    record.messages.flatMap((message) =>
+      message.role === "user"
+        ? [{ messageTimestamp: message.timestamp, turnId: `untracked-${message.timestamp}` }]
+        : [],
+    );
   let contextTokens: number | undefined;
   let turnCount = 0;
   // Set between send() starting and the agent run starting, so a second send steers instead of racing.
@@ -174,6 +183,7 @@ export function createChatSession({
       ...(modelId !== undefined && { modelId }),
       thinkingLevel,
       stagedAttachments: attachmentMetas(stagedIds),
+      revertibleRequests: turnStarts.map((start) => start.messageTimestamp),
       queuedMessages: queued.map(({ id, text, attachmentIds }) => ({
         id,
         text,
@@ -216,6 +226,7 @@ export function createChatSession({
         writesAllowed,
         ...(modelId !== undefined && { modelId }),
         thinkingLevel,
+        turnStarts,
       });
     } catch (cause) {
       error = `Couldn't save this chat: ${errorText(cause)}`;
@@ -310,12 +321,26 @@ export function createChatSession({
     return ids;
   }
 
+  // Requests are identified by timestamp (revert, turn tracking), so two sent in the same millisecond must differ.
+  let lastRequestTimestamp = Math.max(
+    0,
+    ...record.messages.map((message) => message.timestamp ?? 0),
+  );
+  function nextRequestTimestamp(): number {
+    lastRequestTimestamp = Math.max(Date.now(), lastRequestTimestamp + 1);
+    return lastRequestTimestamp;
+  }
+
   function userMessage(text: string, attachmentIds: string[]): UserMessage {
     const attached = attachmentIds.flatMap((id): (TextContent | ImageContent)[] => {
       const attachment = attachments.get(id);
       return attachment ? attachmentToContent(attachment) : [];
     });
-    return { role: "user", content: [{ type: "text", text }, ...attached], timestamp: Date.now() };
+    return {
+      role: "user",
+      content: [{ type: "text", text }, ...attached],
+      timestamp: nextRequestTimestamp(),
+    };
   }
 
   function isRunning(): boolean {
@@ -351,8 +376,10 @@ export function createChatSession({
       agent.state.thinkingLevel = thinkingLevel;
       agent.state.tools = tools;
 
-      hostModule.undo.beginTurn(chatId, crypto.randomUUID());
+      const turnId = crypto.randomUUID();
+      hostModule.undo.beginTurn(chatId, turnId);
       const prompt = userMessage(text, attachmentIds);
+      turnStarts = [...turnStarts, { messageTimestamp: prompt.timestamp, turnId }];
       if (!agent.state.messages.some((message) => message.role === "user"))
         title = titleFrom(text) ?? title;
       const compacted = await compactIfNeeded(agent.state.messages, starting.signal);
@@ -447,6 +474,34 @@ export function createChatSession({
       stagedIds = stagedIds.filter((stagedId) => stagedId !== id);
       attachments.remove(id);
       notify();
+    },
+    async revertTo(messageTimestamp) {
+      if (isRunning()) throw new Error("Stop the response before reverting.");
+      const index = agent.state.messages.findIndex(
+        (message) => message.role === "user" && message.timestamp === messageTimestamp,
+      );
+      const request = agent.state.messages[index];
+      if (!request || request.role !== "user")
+        throw new Error("That message is no longer in this chat.");
+      if (!turnStarts.some((start) => start.messageTimestamp === messageTimestamp))
+        throw new Error(
+          "Only requests that started a turn can be reverted; this one steered a running task.",
+        );
+      const undoTurnIds = turnStarts
+        .filter((start) => start.messageTimestamp >= messageTimestamp)
+        .map((start) => start.turnId);
+      // Undo first: if the document can't be restored, keep the chat as it is rather than half-reverting.
+      const undo = await hostModule.undo.undoTurns(env, chatId, undoTurnIds);
+      agent.state.messages = agent.state.messages.slice(0, index);
+      turnStarts = turnStarts.filter((start) => start.messageTimestamp < messageTimestamp);
+      error = undefined;
+      notify();
+      await persist();
+      const text =
+        typeof request.content === "string"
+          ? request.content
+          : (request.content.find((block) => block.type === "text")?.text ?? "");
+      return { text, undo };
     },
     async undoLastTurn() {
       if (agent.state.isStreaming) throw new Error("Stop the response before undoing.");

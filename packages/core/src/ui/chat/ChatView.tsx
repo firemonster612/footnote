@@ -1,5 +1,5 @@
 import { X } from "lucide-react";
-import { useState, type DragEvent } from "react";
+import { useRef, useState, type DragEvent } from "react";
 import type { ChatSession, ModelInfo, UndoReport } from "../../contracts.ts";
 import { IconButton } from "../components/icon-button.tsx";
 import { errorMessage, useSessionState } from "../hooks.ts";
@@ -24,6 +24,8 @@ export function ChatView({
   const state = useSessionState(session);
   const [notice, setNotice] = useState<Notice>();
   const [dragging, setDragging] = useState(false);
+  const [draft, setDraft] = useState("");
+  const textareaRef = useRef<HTMLTextAreaElement>(null);
   const showError = (cause: unknown) => setNotice({ tone: "error", text: errorMessage(cause) });
 
   async function stageFiles(files: File[]) {
@@ -39,6 +41,17 @@ export function ChatView({
   async function undo() {
     try {
       setNotice({ tone: "info", text: formatUndoReport(await session.undoLastTurn()) });
+    } catch (cause) {
+      showError(cause);
+    }
+  }
+
+  async function revert(messageTimestamp: number) {
+    try {
+      const { text, undo } = await session.revertTo(messageTimestamp);
+      setDraft(text);
+      setNotice({ tone: "info", text: formatRevertReport(undo) });
+      textareaRef.current?.focus();
     } catch (cause) {
       showError(cause);
     }
@@ -65,7 +78,12 @@ export function ChatView({
         void stageFiles([...event.dataTransfer.files]);
       }}
     >
-      <MessageList state={state} session={session} tools={tools} />
+      <MessageList
+        state={state}
+        session={session}
+        tools={tools}
+        onRevert={(timestamp) => void revert(timestamp)}
+      />
       {notice && (
         <div
           role={notice.tone === "error" ? "alert" : "status"}
@@ -92,6 +110,9 @@ export function ChatView({
         onFiles={(files) => void stageFiles(files)}
         onUndo={() => void undo()}
         onSendError={showError}
+        text={draft}
+        onTextChange={setDraft}
+        textareaRef={textareaRef}
       />
       {dragging && (
         <div className="pointer-events-none absolute inset-2 flex items-center justify-center rounded-lg border-2 border-dashed border-accent bg-background/90 font-medium text-accent-text">
@@ -106,4 +127,15 @@ function formatUndoReport({ restored, removed, warnings }: UndoReport): string {
   return [`Undid the last turn (restored ${restored}, removed ${removed}).`, ...warnings].join(
     "\n",
   );
+}
+
+function formatRevertReport({ restored, removed, warnings }: UndoReport): string {
+  const changes =
+    restored + removed > 0
+      ? ` Slides: ${restored} restored, ${removed} removed.`
+      : " No slide changes needed undoing.";
+  return [
+    `Reverted to that request; it's back in the box below.${changes}`,
+    ...warnings.filter((warning) => warning !== "Nothing to undo."),
+  ].join("\n");
 }

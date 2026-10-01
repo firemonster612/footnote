@@ -127,6 +127,8 @@ export interface HostModule {
     beginTurn(chatId: string, turnId: string): void;
     canUndo(chatId: string): boolean;
     undoLastTurn(env: ToolEnv, chatId: string): Promise<UndoReport>;
+    /** Undoes these turns' document changes, newest first. Warns about turns whose checkpoints are gone (e.g. after a reload). */
+    undoTurns(env: ToolEnv, chatId: string, turnIds: string[]): Promise<UndoReport>;
   };
   skills: SkillDefinition[];
 }
@@ -263,6 +265,8 @@ export interface ChatSessionState {
   stagedAttachments: AttachmentMeta[];
   /** Messages waiting for the current run to finish, oldest first. Sent one per run. */
   queuedMessages: QueuedMessage[];
+  /** Timestamps of user messages that started a turn; only these can be reverted to (steered messages can't). */
+  revertibleRequests: number[];
   canUndo: boolean;
   contextUsage?: { tokens: number; window: number };
   error?: string;
@@ -288,6 +292,11 @@ export interface ChatSession {
   stageAttachment(file: File): Promise<AttachmentMeta>;
   unstageAttachment(id: string): void;
   undoLastTurn(): Promise<UndoReport>;
+  /**
+   * Reverts the chat to just before the request sent at `messageTimestamp`: undoes the document changes of that
+   * turn and every later one, then drops the request and everything after it. Returns the request's text.
+   */
+  revertTo(messageTimestamp: number): Promise<{ text: string; undo: UndoReport }>;
 }
 
 export interface FootnoteApp {
