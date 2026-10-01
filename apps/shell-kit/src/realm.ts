@@ -12,7 +12,10 @@ export interface OfficeInfo {
   apiVersions: Record<string, string>;
 }
 
-export type OpResponse = { ok: true; value: unknown } | { ok: false; error: OfficeErrorInfo };
+/** `syncs` counts the context.sync() calls the realm made while the op ran (approximate when ops overlap). */
+export type OpResponse = ({ ok: true; value: unknown } | { ok: false; error: OfficeErrorInfo }) & {
+  syncs?: number;
+};
 
 type CodeConsole = Pick<Console, "log" | "info" | "warn" | "error">;
 
@@ -45,13 +48,33 @@ function highestSupportedMinor(apiSet: string): number {
   return 0;
 }
 
+let syncCount = 0;
+let countingSyncs = false;
+
+/** Counts every RequestContext.sync in this realm, for the opt-in timing log (see logOpTiming). */
+function countSyncs(): void {
+  if (countingSyncs) return;
+  countingSyncs = true;
+  const prototype = PowerPoint.RequestContext.prototype;
+  const sync = prototype.sync;
+  prototype.sync = function <T>(this: PowerPoint.RequestContext, passThroughValue?: T) {
+    syncCount += 1;
+    return sync.call<PowerPoint.RequestContext, [T | undefined], Promise<T>>(
+      this,
+      passThroughValue,
+    );
+  };
+}
+
 export async function callOp(ops: OpRegistry, op: string, args: unknown): Promise<OpResponse> {
   const run = ops[op];
   if (!run) return { ok: false, error: { message: `Unknown op "${op}"` } };
+  countSyncs();
+  const before = syncCount;
   try {
-    return { ok: true, value: await run(args) };
+    return { ok: true, value: await run(args), syncs: syncCount - before };
   } catch (error) {
-    return { ok: false, error: toErrorInfo(error) };
+    return { ok: false, error: toErrorInfo(error), syncs: syncCount - before };
   }
 }
 

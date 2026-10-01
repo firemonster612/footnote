@@ -32,7 +32,7 @@ Show the user the outline first when the request is ambiguous or the deck is lon
 ## 4. Build
 
 - Create slides with `add_slide` and the chosen layout, in order. Fill placeholders with `update_shapes` (set text on the title and body placeholders by shape ID from `get_slide`).
-- Batch: one `update_shapes` call per slide covering every shape on it.
+- Batch: fill the new slides with one `update_shapes` call covering every shape on all of them.
 - Body text: short bullets or a few sentences. Move detail, caveats, and sources to speaker notes with `set_notes` (see `speaker-notes`).
 - Numbers: use `insert_chart` for trends and comparisons, `edit_table` for exact values people will look up. Load `charts-and-tables`.
 - Images from the user's attachments: `add_shape` with kind image and the attachment ID.

@@ -45,6 +45,23 @@ export function slideTitle(shapes: ShapeInfo[]): string | undefined {
     ?.slice(0, 100);
 }
 
+/** A slide's outline from its summary shape tree. `slide` needs id and layout/name loaded. */
+export function toOutline(
+  slide: PowerPoint.Slide,
+  index: number,
+  shapes: ShapeInfo[],
+): SlideOutline {
+  const title = slideTitle(shapes);
+  return {
+    id: slide.id,
+    index,
+    layout: slide.layout.name,
+    ...(title && { title }),
+    shapeCount: shapes.length,
+    fingerprint: fingerprintShapes(shapes),
+  };
+}
+
 /** Outlines (with fingerprints) of the given slides, plus their summary shape trees. */
 export async function readOutlines(
   context: PowerPoint.RequestContext,
@@ -54,20 +71,9 @@ export async function readOutlines(
   const shapes = await readShapeLists(
     context,
     slides.map((slide) => slide.shapes),
-    false,
+    "summary",
   );
-  const outlines = slides.map((slide, i): SlideOutline => {
-    const slideShapes = shapes[i] ?? [];
-    const title = slideTitle(slideShapes);
-    return {
-      id: slide.id,
-      index: indexOf(slide),
-      layout: slide.layout.name,
-      ...(title && { title }),
-      shapeCount: slideShapes.length,
-      fingerprint: fingerprintShapes(slideShapes),
-    };
-  });
+  const outlines = slides.map((slide, i) => toOutline(slide, indexOf(slide), shapes[i] ?? []));
   return { outlines, shapes };
 }
 
@@ -116,7 +122,7 @@ async function readTheme(context: PowerPoint.RequestContext): Promise<ThemeInfo>
   const colorResults = supportsApi("1.10")
     ? THEME_COLORS.map((name) => [name, master.themeColorScheme.getThemeColor(name)] as const)
     : [];
-  const [masterShapes = []] = await readShapeLists(context, [master.shapes], true);
+  const [masterShapes = []] = await readShapeLists(context, [master.shapes], "styles");
 
   const placeholderFont = (types: Set<string>) =>
     masterShapes.find(
@@ -176,7 +182,7 @@ export const readOps = {
   get_slide: ({ slideId }: { slideId: string }): Promise<SlideDetail> =>
     PowerPoint.run(async (context) => {
       const { slide, index } = await findSlide(context, slideId);
-      const [shapes = []] = await readShapeLists(context, [slide.shapes], true);
+      const [shapes = []] = await readShapeLists(context, [slide.shapes], "paragraphs");
       return {
         id: slide.id,
         index,

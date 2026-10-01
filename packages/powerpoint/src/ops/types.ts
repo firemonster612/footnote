@@ -101,6 +101,13 @@ export interface SlideState {
   base64?: string;
 }
 
+/** A slide as it was before a turn first wrote it, for undo. */
+export interface SlideSnapshot {
+  index: number;
+  /** Single-slide PPTX. */
+  base64: string;
+}
+
 export interface WriteReceipt {
   /** IDs of the slides or shapes the op changed or created. */
   changed: string[];
@@ -111,9 +118,24 @@ export interface WriteReceipt {
   fingerprints: Record<string, string>;
   createdSlideIds?: string[];
   deletedSlideIds?: string[];
+  /** Undo snapshots the op exported before writing (the slides in `snapshotSlideIds`). */
+  snapshots?: Record<string, SlideSnapshot>;
+}
+
+/** add_slide also returns the new slide's shapes (its placeholders) so the model can fill them without a read. */
+export interface AddSlideReceipt extends WriteReceipt {
+  shapes: Pick<ShapeInfo, "id" | "name" | "placeholder" | "left" | "top" | "width" | "height">[];
 }
 
 export type InsertFormatting = "KeepSourceFormatting" | "UseDestinationTheme";
+
+/** Passed to every write op that edits existing slides; the op checks and exports inside its own PowerPoint.run. */
+export interface WriteGuardArgs {
+  /** Slide ID → fingerprint the model last read. A slide that changed since fails the write before anything changes. */
+  expectedFingerprints?: Record<string, string>;
+  /** Slides to export for undo before writing: the ones this turn hasn't snapshotted yet. */
+  snapshotSlideIds?: string[];
+}
 
 // ---------------------------------------------------------------------------
 // Write op arguments. Tool schemas (src/tools) must stay assignable to these.
@@ -171,6 +193,11 @@ export interface ShapeUpdate extends ShapeStyle {
   shapeId: string;
   delete?: boolean;
   zOrder?: ZOrder;
+}
+
+export interface SlideShapeUpdates {
+  slideId: string;
+  updates: ShapeUpdate[];
 }
 
 export interface AddShapeArgs extends ShapeStyle {

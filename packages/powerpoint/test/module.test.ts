@@ -1,4 +1,9 @@
-import type { FootnoteTool, OfficeHost, ToolEnv } from "@footnote/core/contracts";
+import {
+  type FootnoteTool,
+  type OfficeHost,
+  OfficeOpError,
+  type ToolEnv,
+} from "@footnote/core/contracts";
 import { describe, expect, it } from "vitest";
 import { createPowerPointModule } from "../src/index.ts";
 import type { DeckState, SlideDetail, SlideState, WriteReceipt } from "../src/ops/types.ts";
@@ -37,13 +42,26 @@ function fakeEnv(slideIds: string[]) {
       }
       return states;
     },
-    update_shapes: ({ slideId }): WriteReceipt => {
+    // Like the real op: fails on a slide whose fingerprint isn't the expected one, exports the requested snapshots.
+    update_shapes: ({ slides, expectedFingerprints, snapshotSlideIds }): WriteReceipt => {
+      const [{ slideId }] = slides;
+      if (
+        expectedFingerprints[slideId] &&
+        expectedFingerprints[slideId] !== fingerprints.get(slideId)
+      )
+        throw new OfficeOpError("update_shapes", {
+          message: `Slide ${index(slideId) + 1} changed since you last read it; call get_slide again.`,
+        });
+      const snapshots = Object.fromEntries(
+        snapshotSlideIds.map((id: string) => [id, { index: index(id), base64: `pptx:${id}` }]),
+      );
       fingerprints.set(slideId, `${fingerprints.get(slideId)}+edit`);
       return {
         changed: ["2"],
         verified: {},
         warnings: [],
         fingerprints: { [slideId]: fingerprints.get(slideId)! },
+        snapshots,
       };
     },
     add_slide: (): WriteReceipt => {
@@ -113,7 +131,7 @@ function tool(tools: FootnoteTool[], name: string): FootnoteTool {
   return found;
 }
 
-const edit = { slideId: "s2", updates: [{ shapeId: "2", text: "Hi" }] };
+const edit = { slides: [{ slideId: "s2", updates: [{ shapeId: "2", text: "Hi" }] }] };
 
 describe("powerpointModule", () => {
   it("rejects a write to a slide that changed since the model read it", async () => {
@@ -125,10 +143,11 @@ describe("powerpointModule", () => {
     await tool(tools, "get_slide").execute("c1", { slideId: "s2" });
     fingerprints.set("s2", "user-edit");
 
+    // The op makes the check; the model gets its message without the "update_shapes failed:" wrapper.
     await expect(tool(tools, "update_shapes").execute("c2", edit)).rejects.toThrow(
-      "Slide 2 changed since you last read it; call get_slide again.",
+      /^Slide 2 changed since you last read it; call get_slide again\.$/,
     );
-    expect(calls.some((call) => call.op === "update_shapes")).toBe(false);
+    expect(calls.at(-1)?.args.expectedFingerprints).toEqual({ s2: "v1" });
   });
 
   it("snapshots a slide once per turn and undo restores it", async () => {
@@ -143,8 +162,8 @@ describe("powerpointModule", () => {
     await tool(tools, "update_shapes").execute("c3", edit); // own receipt keeps the read fresh
 
     const exports = calls
-      .filter((call) => call.op === "get_slide_states")
-      .map((call) => call.args.exportSlideIds);
+      .filter((call) => call.op === "update_shapes")
+      .map((call) => call.args.snapshotSlideIds);
     expect(exports).toEqual([["s2"], []]);
     expect(module.undo.canUndo("chat")).toBe(true);
 

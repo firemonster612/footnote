@@ -64,7 +64,9 @@ function setup(slides: Map<string, string>, attachments: ProcessedAttachment[] =
       throw new Error("not used");
     },
   };
-  const tools = Object.fromEntries(createAdvancedTools(env, deps).map((t) => [t.name, t]));
+  const tools = Object.fromEntries(
+    createAdvancedTools(env, deps, () => undefined).map((t) => [t.name, t]),
+  );
   return { tools, calls, hooks };
 }
 

@@ -84,6 +84,21 @@ export function withDeadline<T>(
   });
 }
 
+const DEBUG_KEY = "footnote:debug";
+
+/**
+ * Opt-in timing log for measuring on real PowerPoint: run `localStorage["footnote:debug"] = "1"` in the console of
+ * the page that owns the OfficeHost, or any page of the same origin (the extension's side panel sets it for its engine).
+ * Logs each call's name and duration to that page's console and, for ops, the sync count the realm reported.
+ */
+export function logOpTiming(name: string, startedAt: number, response?: OpResponse): void {
+  if (localStorage.getItem(DEBUG_KEY) !== "1") return;
+  const ms = Math.round(performance.now() - startedAt);
+  const syncs = response?.syncs === undefined ? "" : `, ${response.syncs} syncs`;
+  const failed = response && !response.ok ? ", failed" : "";
+  console.debug(`[footnote] ${name}: ${ms} ms${syncs}${failed}`);
+}
+
 export function unwrapOpResponse<T>(op: string, response: OpResponse): T {
   if (!response.ok) throw new OfficeOpError(op, response.error);
   // OfficeHost.call<T> lets the caller name an op's result type; op results aren't validated at runtime.

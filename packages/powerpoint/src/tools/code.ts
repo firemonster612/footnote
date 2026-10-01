@@ -46,9 +46,14 @@ export function createCodeTool(env: ToolEnv, guard: WriteGuard): FootnoteTool {
     executionMode: "sequential",
     description: `Runs an async function body inside PowerPoint with \`context\` (PowerPoint.RequestContext) and \`footnote\` (helpers) in scope. \
 Use it for what the structured tools can't do (bulk edits across many slides, properties they don't expose, reading something unusual), not for edits a structured tool covers. \
-Load before reading (\`.load("…")\` then \`await context.sync()\`), sync after writing, and \`return\` a small JSON-safe value; \`console.log\` output is returned too. \
-Results over ${MAX_RESULT_CHARS} characters are cut. PowerPoint for the web applies big batches slowly: \`await context.sync()\` after each slide's edits rather than once at the end, and keep one run to a few slides. \
+\`return\` a small JSON-safe value; \`console.log\` output is returned too. Results over ${MAX_RESULT_CHARS} characters are cut. \
 List the slides the code will change in slideIds so undo can restore them. If the outcome is unknown, re-read before retrying.
+
+Batch so the edits land together (every \`context.sync()\` is a round trip and a visible redraw):
+1. Load everything you need first, for all slides at once (\`footnote.textShapes([...slides])\`, \`footnote.load(objects, "props")\`, or \`.load()\` on each, then one \`await context.sync()\`).
+2. Queue all the writes, across every slide, without syncing in between.
+3. \`await context.sync()\` once at the end.
+Split into more syncs only when a later step needs a value from an earlier write (e.g. the ID of a shape you just added). Never sync inside a loop over slides or shapes.
 
 PowerPoint for the web rules (breaking them fails the run):
 - Batches aren't transactional: when a sync fails, everything queued before the failing statement may already be applied. After an error, read the slide (get_slide) before running again, and make scripts safe to rerun (prefixed shape names + \`footnote.removeShapes\`).

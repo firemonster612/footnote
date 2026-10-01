@@ -4,6 +4,7 @@
 import type { FootnoteTool, ToolEnv } from "@footnote/core/contracts";
 import { Type, type TSchema } from "typebox";
 import type { DeckInfo, WriteReceipt } from "../ops/types.ts";
+import { type SlidePositions, slideLabel, slidesLabel } from "../tools/schemas.ts";
 import {
   buildChartPptx,
   chartKinds,
@@ -92,7 +93,11 @@ const chartParameters = Type.Object({
   ),
 });
 
-export function createAdvancedTools(env: ToolEnv, deps: AdvancedToolDeps): FootnoteTool[] {
+export function createAdvancedTools(
+  env: ToolEnv,
+  deps: AdvancedToolDeps,
+  positions: SlidePositions,
+): FootnoteTool[] {
   const { host } = env;
   const exportSlide = (slideId: string) => host.call<string>("export_slide", { slideId });
   const replaceSlide = (args: ReplaceSlideArgs) =>
@@ -127,7 +132,7 @@ export function createAdvancedTools(env: ToolEnv, deps: AdvancedToolDeps): Footn
       "Read the speaker notes of one or more slides. Returns plain text per slide (paragraphs separated by newlines).",
     parameters: Type.Object({ slideIds: Type.Array(Type.String(), { minItems: 1 }) }),
     describeCall: ({ slideIds }: { slideIds: string[] }) =>
-      `Read notes of ${slideIds.length} slide(s)`,
+      `Read the notes of ${slidesLabel(positions, slideIds)}`,
     async execute(_id, { slideIds }) {
       const notes = [];
       for (const slideId of slideIds)
@@ -149,7 +154,11 @@ export function createAdvancedTools(env: ToolEnv, deps: AdvancedToolDeps): Footn
         minItems: 1,
       }),
     }),
-    describeCall: ({ notes }: { notes: unknown[] }) => `Write notes on ${notes.length} slide(s)`,
+    describeCall: ({ notes }: { notes: { slideId: string }[] }) =>
+      `Write the notes of ${slidesLabel(
+        positions,
+        notes.map((note) => note.slideId),
+      )}`,
     async execute(_id, { notes }) {
       await deps.beforeWrite(notes.map((n) => n.slideId));
       const replaced: Record<string, string> = {};
@@ -193,7 +202,7 @@ export function createAdvancedTools(env: ToolEnv, deps: AdvancedToolDeps): Footn
       "and deleting the old chart shape.",
     parameters: chartParameters,
     describeCall: ({ type, slideId, title }: { type: string; slideId?: string; title?: string }) =>
-      `Insert ${type} chart${title ? ` "${title}"` : ""} ${slideId ? `on slide ${slideId}` : "on a new slide"}`,
+      `Insert ${type} chart${title ? ` "${title}"` : ""} ${slideId ? `on ${slideLabel(positions, slideId)}` : "on a new slide"}`,
     async execute(_id, { slideId, position, bounds, ...chart }) {
       const boundsFor = (size: SlideSize) =>
         bounds ?? {

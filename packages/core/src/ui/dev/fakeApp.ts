@@ -193,13 +193,14 @@ const fakeHostModule: HostModule = {
   ops: {},
   systemPrompt: "",
   createTools: () => [
-    fakeTool("get_slide", "Read slide", "read", (args) => `Read slide ${args.slideId}`),
-    fakeTool("render_slide", "Render slide", "read", (args) => `Render slide ${args.slideId}`),
+    fakeTool("get_slide", "Read slide", "read", (args) => "Read slide 3"),
+    fakeTool("render_slide", "Render slide", "read", (args) => "Render slide 3"),
     fakeTool(
       "update_shapes",
       "Update shapes",
       "write",
-      (args) => `Update ${args.updates.length} shapes on slide ${args.slideId}`,
+      (args: { slides: { updates: unknown[] }[] }) =>
+        `Update ${args.slides.reduce((n, slide) => n + slide.updates.length, 0)} shapes on slide 3`,
     ),
     fakeTool("execute_office_js", "Run Office.js", "code", (args) => args.explanation),
   ],
@@ -478,18 +479,24 @@ function demoState(): ChatSessionState {
     type: "toolCall",
     id: "call-3",
     name: "update_shapes",
-    arguments: { slideId: "257", updates: [{ shapeId: "4", text: "Revenue grew 18%" }] },
+    arguments: {
+      slides: [{ slideId: "257", updates: [{ shapeId: "4", text: "Revenue grew 18%" }] }],
+    },
   };
   const write: ToolCall = {
     type: "toolCall",
     id: "call-4",
     name: "update_shapes",
     arguments: {
-      slideId: "257",
-      updates: [
-        { shapeId: "4", text: "Revenue grew 18%" },
-        { shapeId: "5", fontSize: 18 },
-        { shapeId: "7", delete: true },
+      slides: [
+        {
+          slideId: "257",
+          updates: [
+            { shapeId: "4", text: "Revenue grew 18%" },
+            { shapeId: "5", fontSize: 18 },
+            { shapeId: "7", delete: true },
+          ],
+        },
       ],
     },
   };

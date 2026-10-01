@@ -24,7 +24,7 @@ test("the demo chat renders every message, tool and approval state", async () =>
 
   const expected = [
     "Q3 revenue.xlsx", // attachment chip on the user message
-    "Read slide 257", // describeCall label
+    "Read slide 3", // describeCall label: positions, not slide IDs
     "Waiting for approval",
     "Queued",
     "Failed",

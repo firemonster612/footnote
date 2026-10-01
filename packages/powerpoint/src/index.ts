@@ -1,5 +1,5 @@
 import type { HostModule, ToolEnv } from "@footnote/core/contracts";
-import { createChatRegistry, turnHasChanges } from "./chats.ts";
+import { createChatRegistry, slidePosition, turnHasChanges } from "./chats.ts";
 import { diffDecks, formatDeckState } from "./deckState.ts";
 import { powerpointOps } from "./ops/index.ts";
 import type { DeckState } from "./ops/types.ts";
@@ -50,6 +50,7 @@ export function createPowerPointModule(): HostModule {
       createPowerPointTools(
         env,
         createWriteGuard(env.host, () => chats.forEnv(env)),
+        (slideId) => slidePosition(chats.forEnv(env), slideId),
       ),
     getContextBlock,
     undo: {

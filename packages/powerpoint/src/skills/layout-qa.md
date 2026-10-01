@@ -6,7 +6,7 @@ Use this after creating or changing slides, or when the user asks you to check o
 
 1. `render_slide` for each slide you changed.
 2. Look for the problems below. Use `get_slide` to get exact bounds and font sizes for anything that looks off.
-3. Fix with one batched `update_shapes` call per slide.
+3. Fix everything you found with one batched `update_shapes` call covering all the slides.
 4. Render again. Repeat until clean, but stop after three rounds on one slide and tell the user what's still wrong rather than looping.
 
 Check every changed slide, not just the first. Problems cluster on the slides with the most content.

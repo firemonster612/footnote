@@ -81,9 +81,19 @@ export function createFootnoteHelpers(context: PowerPoint.RequestContext) {
       shape.textFrame.autoSizeSetting = "AutoSizeTextToFitShape";
     },
 
+    /** Loads `props` on every object in one sync. */
+    async load<T extends { load(props: string): unknown }>(
+      objects: T[],
+      props: string,
+    ): Promise<T[]> {
+      for (const object of objects) object.load(props);
+      await context.sync();
+      return objects;
+    },
+
     async readShape(shape: PowerPoint.Shape): Promise<ShapeSummary> {
       shape.load("id,name,type,left,top,width,height");
-      await context.sync();
+      const text = await readText(context, shape);
       const summary: ShapeSummary = {
         id: shape.id,
         name: shape.name,
@@ -93,20 +103,22 @@ export function createFootnoteHelpers(context: PowerPoint.RequestContext) {
         width: round(shape.width),
         height: round(shape.height),
       };
-      const text = await readText(context, shape);
       return text === undefined ? summary : { ...summary, text };
     },
 
-    /** Shapes on a slide that have a text frame, with their text loaded. Loading text on lines, pictures or groups fails the whole sync. */
-    async textShapes(target: PowerPoint.Slide): Promise<TextShape[]> {
-      target.shapes.load("items/id,items/name,items/type");
+    /**
+     * Shapes that have a text frame, with their text loaded, on one slide or several (two syncs in total however many
+     * slides). Loading text on lines, pictures or groups fails the whole sync.
+     */
+    async textShapes(targets: PowerPoint.Slide | PowerPoint.Slide[]): Promise<TextShape[]> {
+      const lists = (Array.isArray(targets) ? targets : [targets]).map((target) =>
+        target.shapes.load("items/id,items/name,items/type"),
+      );
       await context.sync();
-      const candidates = target.shapes.items.filter((shape) => TEXT_SHAPE_TYPES.has(shape.type));
-      const ranges = candidates.map((shape) => {
-        const range = shape.textFrame.textRange;
-        range.load("text");
-        return range;
-      });
+      const candidates = lists.flatMap((list) =>
+        list.items.filter((shape) => TEXT_SHAPE_TYPES.has(shape.type)),
+      );
+      const ranges = candidates.map((shape) => shape.textFrame.textRange.load("text"));
       await context.sync();
       return candidates.map((shape, i) => ({
         shape,
@@ -117,13 +129,22 @@ export function createFootnoteHelpers(context: PowerPoint.RequestContext) {
       }));
     },
 
-    /** Deletes shapes whose name starts with `namePrefix` and syncs. Run it before re-adding generated shapes so a rerun doesn't duplicate them. */
-    async removeShapes(target: PowerPoint.Slide, namePrefix: string): Promise<number> {
-      target.shapes.load("items/name");
+    /**
+     * Queues deletion of the shapes whose name starts with `namePrefix`, on one slide or several, and returns how many.
+     * Syncs once to find them; the deletes go out with your next sync, ahead of anything you queue after this call.
+     */
+    async removeShapes(
+      targets: PowerPoint.Slide | PowerPoint.Slide[],
+      namePrefix: string,
+    ): Promise<number> {
+      const lists = (Array.isArray(targets) ? targets : [targets]).map((target) =>
+        target.shapes.load("items/name"),
+      );
       await context.sync();
-      const matches = target.shapes.items.filter((shape) => shape.name.startsWith(namePrefix));
+      const matches = lists.flatMap((list) =>
+        list.items.filter((shape) => shape.name.startsWith(namePrefix)),
+      );
       for (const shape of matches) shape.delete();
-      await context.sync();
       return matches.length;
     },
 
@@ -152,6 +173,11 @@ export function createFootnoteHelpers(context: PowerPoint.RequestContext) {
   };
 }
 
+/**
+ * Syncs whatever the caller queued on `shape` (which must include `type`) together with its text; undefined when it
+ * has no text frame. One sync on PowerPointApi 1.10; before it, a second for text, since loading text on a shape
+ * without a frame fails the sync.
+ */
 async function readText(
   context: PowerPoint.RequestContext,
   shape: PowerPoint.Shape,
@@ -163,14 +189,11 @@ async function readText(
     await context.sync();
     return frame.isNullObject ? undefined : frame.textRange.text;
   }
-  // Before 1.10, loading text on a shape without a text frame (pictures, charts) fails the sync.
-  try {
-    shape.textFrame.textRange.load("text");
-    await context.sync();
-    return shape.textFrame.textRange.text;
-  } catch {
-    return undefined;
-  }
+  await context.sync();
+  if (!TEXT_SHAPE_TYPES.has(shape.type)) return undefined;
+  const range = shape.textFrame.textRange.load("text");
+  await context.sync();
+  return range.text;
 }
 
 /** Markdown reference for the execute_office_js tool description. */
@@ -178,11 +201,12 @@ export const codeHelpersReference = `\`footnote\` helpers (units are points; sli
 - \`footnote.slide(idOrNumber)\` → PowerPoint.Slide by ID ("267#…") or slide number.
 - \`footnote.shape(slideIdOrNumber, shapeId)\` → PowerPoint.Shape.
 - \`await footnote.allSlides()\` → loaded Slide[] (ids).
+- \`await footnote.load(objects, "prop,prop")\` → loads the properties on every object in one sync.
 - \`footnote.pt(n)\`, \`footnote.inches(n)\`, \`footnote.cm(n)\` → points.
-- \`footnote.setText(shape, text, { font, size, color: "#RRGGBB", bold, italic, align: "Left"|"Center"|"Right"|"Justify" }?)\` queues text + formatting; call \`await context.sync()\` after.
+- \`footnote.setText(shape, text, { font, size, color: "#RRGGBB", bold, italic, align: "Left"|"Center"|"Right"|"Justify" }?)\` queues text + formatting.
 - \`footnote.fit(shape)\` queues word wrap + shrink-text-on-overflow.
 - \`await footnote.readShape(shape)\` → { id, name, type, left, top, width, height, text? } (syncs).
-- \`await footnote.textShapes(slide)\` → [{ shape, id, name, type, text }] for shapes that have text. Use it instead of loading \`textFrame\` on every shape.
-- \`await footnote.removeShapes(slide, "fn-glow")\` → count deleted (syncs). Name generated shapes with a prefix and remove them first so reruns don't duplicate.
+- \`await footnote.textShapes(slideOrSlides)\` → [{ shape, id, name, type, text }] for shapes that have text, on one slide or an array of slides, in two syncs total. Use it instead of loading \`textFrame\` on every shape.
+- \`await footnote.removeShapes(slideOrSlides, "fn-glow")\` → count; queues the deletes (they go out with your next sync, before shapes you add after it). Name generated shapes with a prefix and remove them first so reruns don't duplicate.
 - \`await footnote.canvasImage(w, h, ctx => { ctx.filter = "blur(40px)"; … })\` → base64 PNG; apply with \`shape.fill.setImage(png)\` on a rectangle. Use it for blur, gradients, glows and shadows.
 - \`footnote.json(value)\` → JSON-safe copy of loaded Office objects for the return value.`;

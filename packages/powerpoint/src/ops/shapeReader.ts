@@ -4,14 +4,31 @@ import type { FontInfo, ShapeInfo } from "./types.ts";
 type ShapeList = PowerPoint.ShapeCollection | PowerPoint.ShapeScopedCollection;
 
 // Shape types that carry a text frame and a fill when getTextFrameOrNullObject (1.10) isn't available.
-const TEXT_TYPES = new Set(["GeometricShape", "TextBox", "Placeholder", "Callout"]);
+export const TEXT_TYPES = new Set(["GeometricShape", "TextBox", "Placeholder", "Callout"]);
 const LINE_TYPES = new Set([...TEXT_TYPES, "Line", "Image"]);
+/** Types that always have a text frame, so their text can load before the frame is checked. */
+const CERTAIN_TEXT_TYPES = new Set(["GeometricShape", "TextBox"]);
 const MAX_GROUP_DEPTH = 2;
 const MAX_PARAGRAPHS = 30;
 const FONT_FIELDS = "name,size,color,bold,italic,underline";
 
+/**
+ * How much of each shape a read loads.
+ * summary: IDs, bounds, text, placeholder types and tables; enough for outlines and fingerprints.
+ * styles: adds z-order, rotation, fonts, paragraph formatting, fill and line.
+ * paragraphs: adds per-paragraph fonts for text whose font is mixed (one more sync when there is any).
+ */
+export type ShapeReadLevel = "summary" | "styles" | "paragraphs";
+
+/** Finishes a queued read. Call it after a sync has carried the queued loads. */
+export interface PendingShapeLists {
+  read(): Promise<ShapeInfo[][]>;
+}
+
 interface Node {
   shape: PowerPoint.Shape;
+  /** IDs of shapes on this node's slide known to have a text frame. */
+  knownText?: ReadonlySet<string>;
   frame?: PowerPoint.TextFrame;
   range?: PowerPoint.TextRange;
   placeholder?: PowerPoint.PlaceholderFormat;
@@ -23,40 +40,74 @@ interface Node {
   paragraphs?: { text: string; range: PowerPoint.TextRange }[];
 }
 
-/**
- * Reads the shape trees of several shape lists in a fixed number of syncs per group level.
- * Summary reads (detail=false) load IDs, bounds, text, placeholder types and tables: enough for outlines and fingerprints.
- * Detail reads add z-order, rotation, fonts, paragraph formatting, fill and line.
- */
+/** Reads the shape trees of several shape lists in a fixed number of syncs per group level. */
 export async function readShapeLists(
   context: PowerPoint.RequestContext,
   lists: ShapeList[],
-  detail: boolean,
+  level: ShapeReadLevel,
 ): Promise<ShapeInfo[][]> {
+  const pending = queueShapeLists(context, lists, level);
+  await context.sync();
+  return pending.read();
+}
+
+/**
+ * Queues the first load of a shape-tree read, so it can ride on the caller's next sync (a write's own sync reads back
+ * its result). `textShapeIds[i]` names shapes in `lists[i]` known to have a text frame, from an earlier read: their
+ * text loads with their details instead of in a separate pass. Shape IDs are per slide, so the sets are too.
+ */
+export function queueShapeLists(
+  context: PowerPoint.RequestContext,
+  lists: ShapeList[],
+  level: ShapeReadLevel,
+  textShapeIds: readonly ReadonlySet<string>[] = [],
+): PendingShapeLists {
+  const detail = level !== "summary";
   for (const list of lists) loadBasics(list, detail);
-  await context.sync();
+  return {
+    async read() {
+      const roots = lists.map((list, i) =>
+        list.items.map((shape): Node => ({ shape, knownText: textShapeIds[i] })),
+      );
+      let nodes = roots.flat();
+      if (nodes.length === 0) return roots.map(() => []);
+      const hasKnownFrame = (node: Node) =>
+        CERTAIN_TEXT_TYPES.has(node.shape.type) || node.knownText?.has(node.shape.id) === true;
+      const queueLevel = (batch: Node[], depth: number) => {
+        for (const node of batch) {
+          queueDetails(node, detail, depth);
+          if (hasKnownFrame(node)) queueText(node, detail);
+        }
+      };
+      queueLevel(nodes, 0);
+      await context.sync();
 
-  const roots = lists.map((list) => list.items.map((shape): Node => ({ shape })));
-  let level = roots.flat();
-  for (const node of level) queueDetails(node, detail, 0);
-  await context.sync();
+      // Each pass loads the text this level still needs together with the next group level's details.
+      for (let depth = 1; nodes.length > 0; depth++) {
+        let queued = false;
+        const next: Node[] = [];
+        for (const node of nodes) {
+          if (!node.range && node.frame && !node.frame.isNullObject && node.frame.hasText) {
+            queueText(node, detail);
+            queued = true;
+          }
+          if (!node.childList) continue;
+          node.children = node.childList.items.map((shape): Node => ({
+            shape,
+            knownText: node.knownText,
+          }));
+          next.push(...node.children);
+        }
+        queueLevel(next, depth);
+        if (queued || next.length > 0) await context.sync();
 
-  // Each pass loads this level's text together with the next group level's details.
-  for (let depth = 1; level.length > 0; depth++) {
-    const next: Node[] = [];
-    for (const node of level) {
-      queueText(node, detail);
-      if (!node.childList) continue;
-      node.children = node.childList.items.map((shape): Node => ({ shape }));
-      next.push(...node.children);
-    }
-    for (const node of next) queueDetails(node, detail, depth);
-    await context.sync();
-
-    if (detail && level.map(queueParagraphs).includes(true)) await context.sync();
-    level = next;
-  }
-  return roots.map((nodes) => nodes.map((node) => toShapeInfo(node, detail)));
+        if (level === "paragraphs" && nodes.map(queueParagraphs).includes(true))
+          await context.sync();
+        nodes = next;
+      }
+      return roots.map((shapes) => shapes.map((node) => toShapeInfo(node, detail)));
+    },
+  };
 }
 
 function loadBasics(list: ShapeList, detail: boolean): void {
@@ -85,19 +136,23 @@ function queueDetails(node: Node, detail: boolean, depth: number): void {
 }
 
 function queueText(node: Node, detail: boolean): void {
-  const frame = node.frame;
-  if (!frame || frame.isNullObject || !frame.hasText) return;
-  node.range = frame.textRange.load("text");
+  if (!node.frame) return;
+  node.range = node.frame.textRange.load("text");
   if (!detail) return;
   node.range.font.load(FONT_FIELDS);
   node.range.paragraphFormat.load("horizontalAlignment");
   node.range.paragraphFormat.bulletFormat.load("visible");
 }
 
+/** The shape's text range, when it has text. Shapes with a known frame load their range before hasText is known. */
+function textOf(node: Node): PowerPoint.TextRange | undefined {
+  return node.range && node.frame?.hasText ? node.range : undefined;
+}
+
 /** For text whose font is mixed, loads the font of each paragraph. Returns whether anything was queued. */
 function queueParagraphs(node: Node): boolean {
-  if (!node.range || !isMixed(fontInfo(node.range.font))) return false;
-  const range = node.range;
+  const range = textOf(node);
+  if (!range || !isMixed(fontInfo(range.font))) return false;
   node.paragraphs = paragraphSpans(range.text)
     .slice(0, MAX_PARAGRAPHS)
     .map((span) => ({ text: span.text, range: range.getSubstring(span.start, span.text.length) }));
@@ -149,12 +204,13 @@ function toShapeInfo(node: Node, detail: boolean): ShapeInfo {
     if (supportsApi("1.10") && shape.rotation) info.rotation = shape.rotation;
   }
   if (node.placeholder) info.placeholder = node.placeholder.type;
-  if (node.range) info.text = node.range.text;
+  const range = textOf(node);
+  if (range) info.text = range.text;
   if (detail && node.frame && !node.frame.isNullObject) info.autoSize = node.frame.autoSizeSetting;
-  if (detail && node.range) {
-    info.font = fontInfo(node.range.font);
-    info.align = node.range.paragraphFormat.horizontalAlignment;
-    info.bullets = node.range.paragraphFormat.bulletFormat.visible;
+  if (detail && range) {
+    info.font = fontInfo(range.font);
+    info.align = range.paragraphFormat.horizontalAlignment;
+    info.bullets = range.paragraphFormat.bulletFormat.visible;
   }
   if (node.paragraphs)
     info.paragraphs = node.paragraphs.map((p) => ({ text: p.text, font: fontInfo(p.range.font) }));

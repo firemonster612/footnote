@@ -29,7 +29,7 @@ The deck's existing choices are the spec, even where they differ from general de
 For deck-wide requests ("make the titles consistent", "fix the fonts"), work in two steps:
 
 1. Survey: read every affected slide with `get_slide`. Note the variants you find (title sizes, fonts, bullet styles, capitalization, punctuation).
-2. Pick the majority or template value as the standard, tell the user what you chose, then apply it slide by slide with one batched `update_shapes` call per slide.
+2. Pick the majority or template value as the standard, tell the user what you chose, then apply it with one batched `update_shapes` call covering all the affected slides.
 
 Common consistency fixes:
 

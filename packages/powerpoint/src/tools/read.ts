@@ -10,7 +10,7 @@ import type {
 } from "../ops/types.ts";
 import type { WriteGuard } from "../writeGuard.ts";
 import { jsonResult } from "./results.ts";
-import { defineTool, SlideId } from "./schemas.ts";
+import { defineTool, SlideId, type SlidePositions, slideLabel } from "./schemas.ts";
 
 const MAX_SHAPE_TEXT = 2_000;
 const MAX_TABLE_ROWS = 30;
@@ -56,7 +56,11 @@ export function pageShapes(
   return next < shapes.length ? { page, nextOffset: next } : { page };
 }
 
-export function createReadTools(env: ToolEnv, guard: WriteGuard): FootnoteTool[] {
+export function createReadTools(
+  env: ToolEnv,
+  guard: WriteGuard,
+  positions: SlidePositions,
+): FootnoteTool[] {
   const { host } = env;
 
   const getDeck = defineTool({
@@ -109,7 +113,7 @@ export function createReadTools(env: ToolEnv, guard: WriteGuard): FootnoteTool[]
         }),
       ),
     }),
-    describeCall: (args: { slideId: string }) => `Read slide ${args.slideId}`,
+    describeCall: (args: { slideId: string }) => `Read ${slideLabel(positions, args.slideId)}`,
     async execute(_id, { slideId, offset = 0, limit = DEFAULT_SHAPE_LIMIT }) {
       const slide = await host.call<SlideDetail>("get_slide", { slideId });
       guard.observe(slide.id, slide.fingerprint);
@@ -164,7 +168,7 @@ export function createReadTools(env: ToolEnv, guard: WriteGuard): FootnoteTool[]
         Type.Integer({ minimum: 320, maximum: 1280, description: "Pixels. Default 1280." }),
       ),
     }),
-    describeCall: (args: { slideId: string }) => `Render slide ${args.slideId}`,
+    describeCall: (args: { slideId: string }) => `Render ${slideLabel(positions, args.slideId)}`,
     async execute(_id, { slideId, width }) {
       const data = await host.call<unknown>("render_slide", { slideId, ...(width && { width }) });
       // An image block with non-string data poisons every later request (Anthropic rejects the whole transcript).

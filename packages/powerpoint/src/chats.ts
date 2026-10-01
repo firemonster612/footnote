@@ -76,6 +76,12 @@ export function createChatRegistry(): ChatRegistry {
   };
 }
 
+/** 1-based position of a slide in the outline the model last saw, or undefined when that outline doesn't have it. */
+export function slidePosition(chat: ChatState, slideId: string): number | undefined {
+  const index = chat.lastOutline?.find((slide) => slide.id === slideId)?.index;
+  return index === undefined ? undefined : index + 1;
+}
+
 /** The turn writes belong to; starts an implicit one when core never called beginTurn. */
 export function currentTurn(chat: ChatState): Turn {
   const turn = chat.turns.at(-1) ?? newTurn("implicit");

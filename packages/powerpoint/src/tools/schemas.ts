@@ -14,6 +14,20 @@ export function defineTool<P extends TSchema>(tool: FootnoteTool<P>): FootnoteTo
   };
 }
 
+/** A slide's 1-based position for tool-call labels, when known. */
+export type SlidePositions = (slideId: string) => number | undefined;
+
+/** "slide 3" for labels, or the raw ID when the position isn't known. */
+export const slideLabel = (positions: SlidePositions, slideId: string): string =>
+  `slide ${positions(slideId) ?? slideId}`;
+
+/** "slide 3" or "slides 2, 4, 5". */
+export function slidesLabel(positions: SlidePositions, slideIds: string[]): string {
+  const [first, ...rest] = slideIds;
+  if (first !== undefined && rest.length === 0) return slideLabel(positions, first);
+  return `slides ${slideIds.map((id) => positions(id) ?? id).join(", ")}`;
+}
+
 export const SlideId = Type.String({
   description: "Slide ID from <deck_state> or get_deck (not the position).",
 });
