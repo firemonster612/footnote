@@ -1,5 +1,5 @@
 import { fingerprintShapes } from "./fingerprint.ts";
-import { findShape, findSlide, requireApi } from "./presentation.ts";
+import { findShape, findSlide, readBackFailureWarning, requireApi } from "./presentation.ts";
 import { readShapeLists } from "./shapeReader.ts";
 import type {
   AddShapeArgs,
@@ -128,7 +128,12 @@ export async function shapeReceipt(
   warnings: string[],
   deleted: string[] = [],
 ): Promise<WriteReceipt> {
-  const [shapes = []] = await readShapeLists(context, [slide.shapes], true);
+  let shapes: ShapeInfo[];
+  try {
+    [shapes = []] = await readShapeLists(context, [slide.shapes], true);
+  } catch (error) {
+    return { changed, verified: {}, warnings: [...warnings, readBackFailureWarning(error)], fingerprints: {} };
+  }
   const byId = new Map(flattenShapes(shapes).map((shape) => [shape.id, shape]));
   const verified: Record<string, unknown> = {};
   for (const id of changed) {

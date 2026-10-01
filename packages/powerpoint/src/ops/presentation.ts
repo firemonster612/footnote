@@ -1,4 +1,5 @@
 // Office-realm lookups shared by the ops.
+import { describeOfficeError } from "@footnote/core/contracts";
 
 export const supportsApi = (version: string): boolean =>
   Office.context.requirements.isSetSupported("PowerPointApi", version);
@@ -47,4 +48,18 @@ export async function findShape(
       `Shape ${shapeId} not found on slide ${slide.id}. Call get_slide for current shape IDs.`,
     );
   return shape;
+}
+
+/**
+ * Read-back after a committed write must never fail the op: the model would redo a write that already
+ * happened (duplicate slides). Report the failed verification as a warning instead.
+ */
+export function readBackFailureWarning(error: unknown): string {
+  const detail =
+    error instanceof OfficeExtension.Error
+      ? describeOfficeError({ message: error.message, code: error.code, debugInfo: error.debugInfo })
+      : error instanceof Error
+        ? error.message
+        : String(error);
+  return `The write was applied, but reading it back failed (${detail}). Call get_slide before editing the affected slides again; do not repeat the write.`;
 }

@@ -64,9 +64,20 @@ export class OfficeOpError extends Error {
     readonly op: string,
     readonly info: OfficeErrorInfo,
   ) {
-    super(`${op} failed: ${info.message}`);
+    super(`${op} failed: ${describeOfficeError(info)}`);
     this.name = "OfficeOpError";
   }
+}
+
+/** "GeneralException" alone is useless; Office's debugInfo says which call failed. */
+export function describeOfficeError(info: OfficeErrorInfo): string {
+  const debug = (info.debugInfo ?? {}) as { errorLocation?: string; statement?: string };
+  const details = [
+    info.code && info.code !== info.message ? `code ${info.code}` : undefined,
+    debug.errorLocation ? `at ${debug.errorLocation}` : undefined,
+    debug.statement ? `statement: ${debug.statement.slice(0, 200)}` : undefined,
+  ].filter(Boolean);
+  return details.length > 0 ? `${info.message} (${details.join("; ")})` : info.message;
 }
 
 // ---------------------------------------------------------------------------

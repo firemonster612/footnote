@@ -1,4 +1,4 @@
-import { findSlide, loadSlides, requireApi, slideIds } from "./presentation.ts";
+import { findSlide, loadSlides, readBackFailureWarning, requireApi, slideIds } from "./presentation.ts";
 import { readOutlines } from "./read.ts";
 import type { InsertFormatting, WriteReceipt } from "./types.ts";
 
@@ -8,9 +8,22 @@ async function slideReceipt(
   ids: string[],
   extra: Pick<WriteReceipt, "createdSlideIds" | "deletedSlideIds"> & { warnings?: string[] } = {},
 ): Promise<WriteReceipt> {
-  const all = await loadSlides(context);
-  const slides = all.filter((slide) => ids.includes(slide.id));
-  const { outlines } = await readOutlines(context, slides, (slide) => all.indexOf(slide));
+  let all: PowerPoint.Slide[];
+  let outlines: Awaited<ReturnType<typeof readOutlines>>["outlines"];
+  try {
+    all = await loadSlides(context);
+    const slides = all.filter((slide) => ids.includes(slide.id));
+    ({ outlines } = await readOutlines(context, slides, (slide) => all.indexOf(slide)));
+  } catch (error) {
+    return {
+      changed: ids,
+      verified: {},
+      warnings: [...(extra.warnings ?? []), readBackFailureWarning(error)],
+      fingerprints: {},
+      ...(extra.createdSlideIds && { createdSlideIds: extra.createdSlideIds }),
+      ...(extra.deletedSlideIds && { deletedSlideIds: extra.deletedSlideIds }),
+    };
+  }
   const missing = ids.filter(
     (id) => !outlines.some((outline) => outline.id === id) && !extra.deletedSlideIds?.includes(id),
   );

@@ -1,3 +1,4 @@
+import { withToolNameRepair } from "./toolNames.ts";
 import {
   Agent,
   type AgentContext,
@@ -128,7 +129,7 @@ export function createChatSession({
       messages: record.messages,
       thinkingLevel,
     },
-    streamFn: provider.streamFn,
+    streamFn: withToolNameRepair(provider.streamFn, () => tools.map((tool) => tool.name)),
     convertToLlm: toLlm,
     beforeToolCall: async ({ toolCall, args }, signal) => {
       const tool = tools.find((candidate) => candidate.name === toolCall.name);

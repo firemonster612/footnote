@@ -6,6 +6,8 @@ import { defineTool, SlideId } from "./schemas.ts";
 
 const MAX_CODE_CHARS = 20_000;
 const MAX_RESULT_CHARS = 8_000;
+/** PowerPoint for the web applies large batches slowly; a 60s cap reported real, still-landing edits as failures. */
+const CODE_TIMEOUT_MS = 300_000;
 
 const clip = (text: string): string =>
   text.length > MAX_RESULT_CHARS
@@ -18,7 +20,7 @@ export function formatCodeRun(run: CodeRunResult): string {
   if (run.outcomeUnknown) {
     const reason = run.error ? ` (${run.error.message})` : "";
     return clip(
-      `Outcome unknown${reason}: the code timed out or the connection dropped, so edits may or may not have applied. Re-read the affected slides before retrying.${logs}`,
+      `Outcome unknown${reason}: the code timed out or the connection dropped, so edits may or may not have applied. Do not rerun it: call get_deck or get_slide first, because the edits often landed.${logs}`,
     );
   }
   if (!run.ok) {
@@ -38,7 +40,7 @@ export function createCodeTool(env: ToolEnv, guard: WriteGuard): FootnoteTool {
     description: `Runs an async function body inside PowerPoint with \`context\` (PowerPoint.RequestContext) and \`footnote\` (helpers) in scope. \
 Use it for what the structured tools can't do (bulk edits across many slides, properties they don't expose, reading something unusual), not for edits a structured tool covers. \
 Load before reading (\`.load("…")\` then \`await context.sync()\`), sync after writing, and \`return\` a small JSON-safe value; \`console.log\` output is returned too. \
-Results over ${MAX_RESULT_CHARS} characters are cut. The user approves each run, so write the whole job as one script. \
+Results over ${MAX_RESULT_CHARS} characters are cut. PowerPoint for the web applies big batches slowly: \`await context.sync()\` after each slide's edits rather than once at the end, and keep one run to a few slides. \
 List the slides the code will change in slideIds so undo can restore them. If the outcome is unknown, re-read before retrying.
 
 ${codeHelpersReference}`,
@@ -57,7 +59,7 @@ ${codeHelpersReference}`,
     describeCall: (args: { explanation: string }) => args.explanation,
     async execute(_id, { code, slideIds = [] }, signal) {
       if (slideIds.length > 0) await guard.checkpoint(slideIds);
-      const run = await env.host.runCode(code, { ...(signal && { signal }) });
+      const run = await env.host.runCode(code, { timeoutMs: CODE_TIMEOUT_MS, ...(signal && { signal }) });
       return {
         content: [{ type: "text", text: formatCodeRun(run) }],
         details: run,

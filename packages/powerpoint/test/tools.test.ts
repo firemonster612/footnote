@@ -39,7 +39,7 @@ describe("formatCodeRun", () => {
       error: { message: "timed out after 30s" },
     });
     expect(text).toContain("Outcome unknown (timed out after 30s)");
-    expect(text).toContain("Re-read the affected slides before retrying.");
+    expect(text).toContain("Do not rerun it: call get_deck or get_slide first");
     expect(text).toContain("started");
   });
 
