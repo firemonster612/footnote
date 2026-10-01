@@ -1,4 +1,9 @@
-import type { AssistantMessage, ToolResultMessage, UserMessage } from "@earendil-works/pi-ai";
+import type {
+  ToolCall,
+  AssistantMessage,
+  ToolResultMessage,
+  UserMessage,
+} from "@earendil-works/pi-ai";
 import { ChevronRight, FileText, LoaderCircle, TriangleAlert } from "lucide-react";
 import { useLayoutEffect, useMemo, useRef } from "react";
 import type { AgentMessage, ChatSession, ChatSessionState, FootnoteTool } from "../../contracts.ts";
@@ -165,6 +170,9 @@ function AssistantMessageView({
   results: Map<string, ToolResultMessage>;
   tools: ToolIndex;
 }) {
+  const firstUnfinishedCallId = message.content.find(
+    (part): part is ToolCall => part.type === "toolCall" && !results.has(part.id),
+  )?.id;
   const replyText = message.content
     .flatMap((part) => (part.type === "text" && part.text.trim() ? [part.text] : []))
     .join("\n\n");
@@ -191,7 +199,13 @@ function AssistantMessageView({
                 call={part}
                 tool={tools.get(part.name)}
                 result={result}
-                status={toolCallStatus(part.id, result, state.pendingApprovals, state.isStreaming)}
+                status={toolCallStatus(
+                  part.id,
+                  result,
+                  state.pendingApprovals,
+                  state.isStreaming,
+                  firstUnfinishedCallId,
+                )}
               />
             );
           }

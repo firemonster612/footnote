@@ -35,6 +35,9 @@ describe("toolCallStatus", () => {
   test("without a result: approval, then running while streaming, else not run", () => {
     expect(toolCallStatus("c1", undefined, [approval], true)).toBe("awaiting-approval");
     expect(toolCallStatus("c2", undefined, [approval], true)).toBe("running");
+    // c2 waits behind c1's approval: it hasn't started yet.
+    expect(toolCallStatus("c2", undefined, [approval], true, "c1")).toBe("queued");
+    expect(toolCallStatus("c1", undefined, [], true, "c1")).toBe("running");
     expect(toolCallStatus("c2", undefined, [], false)).toBe("not-run");
   });
 });

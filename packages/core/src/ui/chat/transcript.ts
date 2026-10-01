@@ -3,7 +3,13 @@
 import type { ImageContent, TextContent, ToolResultMessage } from "@earendil-works/pi-ai";
 import type { AgentMessage, ApprovalRequest, ThinkingLevel } from "../../contracts.ts";
 
-export type ToolCallStatus = "awaiting-approval" | "running" | "done" | "error" | "not-run";
+export type ToolCallStatus =
+  | "awaiting-approval"
+  | "running"
+  | "queued"
+  | "done"
+  | "error"
+  | "not-run";
 
 export function indexToolResults(messages: AgentMessage[]): Map<string, ToolResultMessage> {
   const results = new Map<string, ToolResultMessage>();
@@ -13,16 +19,24 @@ export function indexToolResults(messages: AgentMessage[]): Map<string, ToolResu
   return results;
 }
 
+/**
+ * Tool calls run one at a time in order, so only the first call without a result is running (or waiting for
+ * approval); the ones after it are queued.
+ */
 export function toolCallStatus(
   toolCallId: string,
   result: ToolResultMessage | undefined,
   pendingApprovals: ApprovalRequest[],
   isStreaming: boolean,
+  firstUnfinishedCallId?: string,
 ): ToolCallStatus {
   if (result) return result.isError ? "error" : "done";
   if (pendingApprovals.some((approval) => approval.toolCallId === toolCallId))
     return "awaiting-approval";
-  return isStreaming ? "running" : "not-run";
+  if (!isStreaming) return "not-run";
+  return firstUnfinishedCallId === undefined || firstUnfinishedCallId === toolCallId
+    ? "running"
+    : "queued";
 }
 
 export interface UserMessageParts {

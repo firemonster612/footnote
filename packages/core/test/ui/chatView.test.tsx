@@ -26,7 +26,7 @@ test("the demo chat renders every message, tool and approval state", async () =>
     "Q3 revenue.xlsx", // attachment chip on the user message
     "Read slide 257", // describeCall label
     "Waiting for approval",
-    "Running",
+    "Queued",
     "Failed",
     "Provider returned 529", // assistant error
     "Allow writes for this chat", // write approval

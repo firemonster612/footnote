@@ -45,6 +45,8 @@ export interface ModelList {
   reload(): Promise<void>;
 }
 
+const RELOAD_DEBOUNCE_MS = 500;
+
 /** Lists the endpoint's models, refetching when the endpoint changes. */
 export function useModels(app: FootnoteApp, settings: Settings): ModelList {
   const [models, setModels] = useState<ModelInfo[]>([]);
@@ -67,7 +69,11 @@ export function useModels(app: FootnoteApp, settings: Settings): ModelList {
 
   const { baseUrl, apiKey } = settings.endpoint;
   useEffect(() => {
-    if (baseUrl) void reload();
+    // Without a key the proxy just answers 401; keyless servers can still use Test connection.
+    if (!baseUrl || !apiKey) return;
+    // Settings save per keystroke; fetch once typing pauses instead of once per character.
+    const timer = setTimeout(() => void reload(), RELOAD_DEBOUNCE_MS);
+    return () => clearTimeout(timer);
   }, [reload, baseUrl, apiKey]);
 
   return { models, error, loading, reload };
