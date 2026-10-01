@@ -61,8 +61,8 @@ export function MessageList({
     }
   };
 
-  const waiting =
-    state.isStreaming && !state.streamingMessage && state.pendingApprovals.length === 0;
+  // Stays up for the whole run, including while text streams, so the only sign of work isn't the Stop button.
+  const working = state.isStreaming && state.pendingApprovals.length === 0;
 
   return (
     <div
@@ -77,13 +77,7 @@ export function MessageList({
       <div role="log" aria-live="polite" className="flex flex-col gap-3 p-3">
         {state.messages.map((message, index) => renderMessage(message, index))}
         {state.streamingMessage && renderMessage(state.streamingMessage, "streaming", true)}
-        {waiting && (
-          <LoaderCircle
-            size={16}
-            className="animate-spin text-subtle-foreground"
-            aria-label="Working"
-          />
-        )}
+        {working && <WorkingIndicator />}
         {state.pendingApprovals.map((request) => (
           <ApprovalCard
             key={request.id}
@@ -93,6 +87,15 @@ export function MessageList({
         ))}
         {state.error && <ErrorNote text={state.error} />}
       </div>
+    </div>
+  );
+}
+
+function WorkingIndicator() {
+  return (
+    <div role="status" className="flex items-center gap-2 text-small">
+      <LoaderCircle size={14} aria-hidden className="animate-spin text-subtle-foreground" />
+      <span className="text-shimmer font-medium">Working…</span>
     </div>
   );
 }
