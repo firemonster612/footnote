@@ -48,6 +48,9 @@ const apiStreams: Record<ApiFormat, ProviderStreams> = {
 
 export function createProviderClient(getSettings: () => Settings): ProviderClient {
   let authStyle: AuthStyle = "both";
+  // A model keeps the endpoint it was resolved at, so it must keep that endpoint's key too: changing the settings
+  // mid-run would otherwise send the new key to the old server.
+  const credentials = new WeakMap<Model<Api>, { apiKey: string; authStyle: AuthStyle }>();
   let listing: { endpointKey: string; models: ListedModel[] } | undefined;
 
   const endpointKey = ({ endpoint }: Settings) =>
@@ -111,16 +114,19 @@ export function createProviderClient(getSettings: () => Settings): ProviderClien
         throw new Error(
           `${modelId} isn't offered by ${settings.endpoint.baseUrl}. Pick another model.`,
         );
-      return buildModel(listed, settings.endpoint.baseUrl, settings.apiOverrides[modelId]);
+      const model = buildModel(listed, settings.endpoint.baseUrl, settings.apiOverrides[modelId]);
+      credentials.set(model, { apiKey: settings.endpoint.apiKey, authStyle });
+      return model;
     },
 
     streamFn(model, context, options) {
-      const { apiKey } = getSettings().endpoint;
+      const bound = credentials.get(model);
+      if (!bound) throw new Error(`${model.id} wasn't resolved by this provider client.`);
       // resolveModel only builds models whose api is an ApiFormat.
       return apiStreams[model.api as ApiFormat].streamSimple(model, context, {
         ...options,
-        apiKey,
-        headers: { ...options?.headers, ...authHeaders(authStyle, apiKey) },
+        apiKey: bound.apiKey,
+        headers: { ...options?.headers, ...authHeaders(bound.authStyle, bound.apiKey) },
       });
     },
   };

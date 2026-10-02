@@ -190,6 +190,27 @@ describe("keepSlides", () => {
     expect(await readRelationships(reduced, PRESENTATION_PART)).toHaveLength(sourceRelCount - 1);
   });
 
+  it("drops links and section entries that point at removed slides", async () => {
+    const pptx = new PptxGenJS();
+    pptx.addSection({ title: "Main" });
+    pptx
+      .addSlide({ sectionTitle: "Main" })
+      .addText("Jump", { x: 1, y: 1, w: 4, h: 1, hyperlink: { slide: 2 } });
+    pptx.addSlide({ sectionTitle: "Main" }).addText("Target", { x: 1, y: 1, w: 4, h: 1 });
+    const source = (await pptx.write({ outputType: "base64" })) as string;
+
+    const reduced = await loadPptx(await keepSlides(source, [1]));
+
+    const rels = await readRelationships(reduced, "ppt/slides/slide1.xml");
+    expect(rels.filter((rel) => rel.type === relTypes.slide)).toEqual([]);
+    const slideXml = await readPart(reduced, "ppt/slides/slide1.xml");
+    expect(slideXml).toContain("Jump");
+    expect(slideXml).not.toContain("hlinkClick");
+    const presentation = await readPart(reduced, PRESENTATION_PART);
+    expect(presentation).toContain('<p14:sldId id="256"/>');
+    expect(presentation).not.toContain('<p14:sldId id="257"/>');
+  });
+
   it("rejects slide numbers outside the file", async () => {
     await expect(keepSlides(await makePptx(text("one")), [2])).rejects.toThrow(
       "out of range; the file has 1 slides",

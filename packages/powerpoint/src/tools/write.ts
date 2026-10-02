@@ -1,3 +1,4 @@
+import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { FootnoteTool, ToolEnv } from "@footnote/core/contracts";
 import { Type } from "typebox";
 import type {
@@ -7,8 +8,14 @@ import type {
   SlideShapeUpdates,
   WriteReceipt,
 } from "../ops/types.ts";
-import { modelFacingError, type WriteGuard } from "../writeGuard.ts";
-import { plural, receiptResult } from "./results.ts";
+import {
+  isOutcomeUnknown,
+  modelFacingError,
+  outcomeUnknownMessage,
+  WRITE_TIMEOUT_MS,
+  type WriteGuard,
+} from "../writeGuard.ts";
+import { plural, receiptResult, textResult } from "./results.ts";
 import {
   boundsProperties,
   Color,
@@ -35,22 +42,24 @@ export function createWriteTools(
   const { host } = env;
 
   /**
-   * Runs a write op in one host call, then records its receipt (undo snapshots, created slides, fresh fingerprints).
-   * Guarded ops get `guard.writeArgs` in `args` and check freshness and export snapshots inside their own run.
+   * Runs a write op in one host call, records its receipt (undo snapshots, created slides, fresh fingerprints) and
+   * presents it. Guarded ops get `guard.writeArgs` in `args` and check freshness and export snapshots inside their own
+   * run. A call that timed out or lost the bridge may still have applied, so it reports an unknown outcome.
    */
   async function write<R extends WriteReceipt>(
     op: string,
     args: object,
-  ): Promise<Omit<R, "snapshots">> {
+    present: (receipt: R) => AgentToolResult<unknown> = receiptResult,
+  ): Promise<AgentToolResult<unknown>> {
     let receipt: R;
     try {
-      receipt = await host.call<R>(op, args);
+      receipt = await host.call<R>(op, args, { timeoutMs: WRITE_TIMEOUT_MS });
     } catch (error) {
+      if (isOutcomeUnknown(error)) return textResult(outcomeUnknownMessage(error));
       throw modelFacingError(error);
     }
     guard.record(receipt);
-    const { snapshots: _, ...withoutSnapshots } = receipt;
-    return withoutSnapshots;
+    return present(receipt);
   }
 
   function imageFromAttachment(attachmentId: string): string {
@@ -86,12 +95,11 @@ export function createWriteTools(
     describeCall: (args: { position?: number }) =>
       args.position ? `Add a slide at position ${args.position}` : "Add a slide at the end",
     async execute(_id, { layoutId, slideMasterId, position }) {
-      const { shapes, ...receipt } = await write<AddSlideReceipt>("add_slide", {
-        layoutId,
-        slideMasterId,
-        ...(position && { index: position - 1 }),
-      });
-      return receiptResult(receipt, { shapes });
+      return write<AddSlideReceipt>(
+        "add_slide",
+        { layoutId, slideMasterId, ...(position && { index: position - 1 }) },
+        ({ shapes, ...receipt }) => receiptResult(receipt, { shapes }),
+      );
     },
   });
 
@@ -106,9 +114,7 @@ export function createWriteTools(
     describeCall: (args: { slideIds: string[] }) =>
       `Delete ${slidesLabel(positions, args.slideIds)}`,
     async execute(_id, { slideIds }) {
-      return receiptResult(
-        await write("delete_slides", { slideIds, ...guard.writeArgs(slideIds) }),
-      );
+      return write("delete_slides", { slideIds, ...guard.writeArgs(slideIds) });
     },
   });
 
@@ -124,9 +130,7 @@ export function createWriteTools(
     async execute(_id, { slideId, position }) {
       // Moving doesn't overwrite content, so it only needs the undo snapshot, not the freshness check.
       const { snapshotSlideIds } = guard.writeArgs([slideId]);
-      return receiptResult(
-        await write("move_slide", { slideId, toIndex: position - 1, snapshotSlideIds }),
-      );
+      return write("move_slide", { slideId, toIndex: position - 1, snapshotSlideIds });
     },
   });
 
@@ -141,9 +145,7 @@ export function createWriteTools(
     parameters: Type.Object({ slideId: SlideId, position: Type.Optional(Position) }),
     describeCall: (args: { slideId: string }) => `Duplicate ${slideLabel(positions, args.slideId)}`,
     async execute(_id, { slideId, position }) {
-      return receiptResult(
-        await write("duplicate_slide", { slideId, ...(position && { toIndex: position - 1 }) }),
-      );
+      return write("duplicate_slide", { slideId, ...(position && { toIndex: position - 1 }) });
     },
   });
 
@@ -158,9 +160,7 @@ export function createWriteTools(
     describeCall: (args: { slideId: string }) =>
       `Change the layout of ${slideLabel(positions, args.slideId)}`,
     async execute(_id, { slideId, layoutId }) {
-      return receiptResult(
-        await write("apply_layout", { slideId, layoutId, ...guard.writeArgs([slideId]) }),
-      );
+      return write("apply_layout", { slideId, layoutId, ...guard.writeArgs([slideId]) });
     },
   });
 
@@ -195,9 +195,7 @@ export function createWriteTools(
         ...params,
         ...(attachmentId && { imageBase64: imageFromAttachment(attachmentId) }),
       };
-      return receiptResult(
-        await write("add_shape", { ...args, ...guard.writeArgs([params.slideId]) }),
-      );
+      return write("add_shape", { ...args, ...guard.writeArgs([params.slideId]) });
     },
   });
 
@@ -225,7 +223,8 @@ export function createWriteTools(
       "Batch-edits shapes on one or more slides: text (plain or formatted runs), font, paragraph alignment/bullets, text frame, fill, line, " +
       "bounds, rotation, z-order, name, hyperlink, or delete. Everything in one call lands in PowerPoint at once, so put every shape " +
       "change you've planned, across all the slides involved, in a single call rather than one call per slide or shape. " +
-      "Only listed fields change. Use theme fonts and colors unless asked otherwise; keep text inside its shape.",
+      "Only listed fields change. Use theme fonts and colors unless asked otherwise; keep text inside its shape. " +
+      "Shapes inside a group (get_slide's children) can't be edited here: ungroup with group_shapes first, or move the whole group.",
     parameters: Type.Object({
       slides: Type.Array(
         Type.Object({
@@ -243,9 +242,7 @@ export function createWriteTools(
     async execute(_id, { slides }) {
       const edits: SlideShapeUpdates[] = slides;
       const slideIds = [...new Set(edits.map((edit) => edit.slideId))];
-      return receiptResult(
-        await write("update_shapes", { slides: edits, ...guard.writeArgs(slideIds) }),
-      );
+      return write("update_shapes", { slides: edits, ...guard.writeArgs(slideIds) });
     },
   });
 
@@ -320,9 +317,7 @@ export function createWriteTools(
         : `Edit a table on ${slideLabel(positions, args.slideId)}`,
     async execute(_id, params) {
       const args: EditTableArgs = params;
-      return receiptResult(
-        await write("edit_table", { ...args, ...guard.writeArgs([params.slideId]) }),
-      );
+      return write("edit_table", { ...args, ...guard.writeArgs([params.slideId]) });
     },
   });
 
@@ -347,14 +342,10 @@ export function createWriteTools(
       const guardArgs = guard.writeArgs([slideId]);
       if (action === "group") {
         if (shapeIds.length < 2) throw new Error("Grouping needs at least two shape IDs.");
-        return receiptResult(
-          await write("group_shapes", { slideId, shapeIds, ...(name && { name }), ...guardArgs }),
-        );
+        return write("group_shapes", { slideId, shapeIds, ...(name && { name }), ...guardArgs });
       }
       if (shapeIds.length !== 1) throw new Error("Ungroup takes exactly one group shape ID.");
-      return receiptResult(
-        await write("ungroup_shape", { slideId, shapeId: shapeIds[0], ...guardArgs }),
-      );
+      return write("ungroup_shape", { slideId, shapeId: shapeIds[0], ...guardArgs });
     },
   });
 

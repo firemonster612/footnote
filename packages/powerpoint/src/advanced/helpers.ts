@@ -1,6 +1,9 @@
 /// <reference types="office-js" />
 // `footnote` helper library for code mode (execute_office_js). Runs in the Office realm next to the model's code.
 
+import { moveSelectionOff, slideIds, supportsApi } from "../ops/presentation.ts";
+import { CERTAIN_TEXT_TYPES, TEXT_TYPES } from "../ops/shapeReader.ts";
+
 const POINTS_PER_INCH = 72;
 const CM_PER_INCH = 2.54;
 
@@ -26,9 +29,6 @@ export interface ShapeSummary {
 }
 
 const round = (n: number) => Math.round(n * 10) / 10;
-
-/** Shape types that have a text frame before PowerPointApi 1.10 added getTextFrameOrNullObject. */
-const TEXT_SHAPE_TYPES = new Set(["GeometricShape", "TextBox", "Placeholder"]);
 
 export interface TextShape {
   shape: PowerPoint.Shape;
@@ -93,7 +93,8 @@ export function createFootnoteHelpers(context: PowerPoint.RequestContext) {
 
     async readShape(shape: PowerPoint.Shape): Promise<ShapeSummary> {
       shape.load("id,name,type,left,top,width,height");
-      const text = await readText(context, shape);
+      await context.sync();
+      const [text] = await loadTexts(context, [shape]);
       const summary: ShapeSummary = {
         id: shape.id,
         name: shape.name,
@@ -108,25 +109,29 @@ export function createFootnoteHelpers(context: PowerPoint.RequestContext) {
 
     /**
      * Shapes that have a text frame, with their text loaded, on one slide or several (two syncs in total however many
-     * slides). Loading text on lines, pictures or groups fails the whole sync.
+     * slides; three before PowerPointApi 1.10 when a placeholder has text). Touching textFrame on a shape without one
+     * fails the whole sync, so use this instead.
      */
     async textShapes(targets: PowerPoint.Slide | PowerPoint.Slide[]): Promise<TextShape[]> {
       const lists = (Array.isArray(targets) ? targets : [targets]).map((target) =>
         target.shapes.load("items/id,items/name,items/type"),
       );
       await context.sync();
-      const candidates = lists.flatMap((list) =>
-        list.items.filter((shape) => TEXT_SHAPE_TYPES.has(shape.type)),
-      );
-      const ranges = candidates.map((shape) => shape.textFrame.textRange.load("text"));
+      const shapes = lists.flatMap((list) => list.items);
+      const texts = await loadTexts(context, shapes);
+      return shapes.flatMap((shape, i) => {
+        const text = texts[i];
+        return text === undefined
+          ? []
+          : [{ shape, id: shape.id, name: shape.name, type: shape.type, text }];
+      });
+    },
+
+    /** Deletes slides (one sync), moving the selection off them first: deleting the slide on screen crashes PowerPoint for the web. */
+    async deleteSlides(ids: string[]): Promise<void> {
+      await moveSelectionOff(context, await slideIds(context), ids);
+      for (const id of ids) slides.getItem(id).delete();
       await context.sync();
-      return candidates.map((shape, i) => ({
-        shape,
-        id: shape.id,
-        name: shape.name,
-        type: shape.type,
-        text: ranges[i]!.text,
-      }));
     },
 
     /**
@@ -174,26 +179,32 @@ export function createFootnoteHelpers(context: PowerPoint.RequestContext) {
 }
 
 /**
- * Syncs whatever the caller queued on `shape` (which must include `type`) together with its text; undefined when it
- * has no text frame. One sync on PowerPointApi 1.10; before it, a second for text, since loading text on a shape
- * without a frame fails the sync.
+ * Text of each shape (`type` loaded), or undefined for shapes without a text frame. Finds frames like shapeReader:
+ * getTextFrameOrNullObject on PowerPointApi 1.10, where text loads in the same sync; before it, by shape type, and a
+ * placeholder's text only once its frame says it has some (one more sync).
  */
-async function readText(
+async function loadTexts(
   context: PowerPoint.RequestContext,
-  shape: PowerPoint.Shape,
-): Promise<string | undefined> {
-  if (Office.context.requirements.isSetSupported("PowerPointApi", "1.10")) {
-    const frame = shape.getTextFrameOrNullObject();
-    frame.load("hasText");
-    frame.textRange.load("text");
-    await context.sync();
-    return frame.isNullObject ? undefined : frame.textRange.text;
-  }
+  shapes: PowerPoint.Shape[],
+): Promise<(string | undefined)[]> {
+  const hasFrameApi = supportsApi("1.10");
+  const frames = shapes.map((shape) => {
+    if (hasFrameApi) return shape.getTextFrameOrNullObject().load("hasText");
+    return TEXT_TYPES.has(shape.type) ? shape.textFrame.load("hasText") : undefined;
+  });
+  const ranges = frames.map((frame, i) =>
+    frame && (hasFrameApi || CERTAIN_TEXT_TYPES.has(shapes[i]!.type))
+      ? frame.textRange.load("text")
+      : undefined,
+  );
   await context.sync();
-  if (!TEXT_SHAPE_TYPES.has(shape.type)) return undefined;
-  const range = shape.textFrame.textRange.load("text");
-  await context.sync();
-  return range.text;
+  const late = frames.map((frame, i) =>
+    frame && !ranges[i] && frame.hasText ? frame.textRange.load("text") : undefined,
+  );
+  if (late.some(Boolean)) await context.sync();
+  return frames.map((frame, i) =>
+    !frame || frame.isNullObject ? undefined : ((ranges[i] ?? late[i])?.text ?? ""),
+  );
 }
 
 /** Markdown reference for the execute_office_js tool description. */
@@ -206,7 +217,8 @@ export const codeHelpersReference = `\`footnote\` helpers (units are points; sli
 - \`footnote.setText(shape, text, { font, size, color: "#RRGGBB", bold, italic, align: "Left"|"Center"|"Right"|"Justify" }?)\` queues text + formatting.
 - \`footnote.fit(shape)\` queues word wrap + shrink-text-on-overflow.
 - \`await footnote.readShape(shape)\` → { id, name, type, left, top, width, height, text? } (syncs).
-- \`await footnote.textShapes(slideOrSlides)\` → [{ shape, id, name, type, text }] for shapes that have text, on one slide or an array of slides, in two syncs total. Use it instead of loading \`textFrame\` on every shape.
+- \`await footnote.textShapes(slideOrSlides)\` → [{ shape, id, name, type, text }] for shapes that have a text frame, on one slide or an array of slides, in two syncs total. Use it instead of loading \`textFrame\` on every shape.
+- \`await footnote.deleteSlides(ids)\` deletes slides safely (moves the selection off them first) and syncs.
 - \`await footnote.removeShapes(slideOrSlides, "fn-glow")\` → count; queues the deletes (they go out with your next sync, before shapes you add after it). Name generated shapes with a prefix and remove them first so reruns don't duplicate.
 - \`await footnote.canvasImage(w, h, ctx => { ctx.filter = "blur(40px)"; … })\` → base64 PNG; apply with \`shape.fill.setImage(png)\` on a rectangle. Use it for blur, gradients, glows and shadows.
 - \`footnote.json(value)\` → JSON-safe copy of loaded Office objects for the return value.`;

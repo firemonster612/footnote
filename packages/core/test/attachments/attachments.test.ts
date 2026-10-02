@@ -1,4 +1,4 @@
-import { beforeAll, describe, expect, test, vi } from "vitest";
+import { afterEach, beforeAll, describe, expect, test, vi } from "vitest";
 import type { ToolEnv } from "../../src/contracts.ts";
 import {
   attachmentToContent,
@@ -95,6 +95,36 @@ describe("processAttachment", () => {
     await expect(
       processAttachment(fileOf(new Uint8Array(50 * 1024 * 1024 + 1), "huge.txt")),
     ).rejects.toThrow("limited to 50 MB");
+  });
+});
+
+describe("images", () => {
+  afterEach(() => vi.unstubAllGlobals());
+
+  test("re-encodes an image within the size limit when its bytes are too large for providers", async () => {
+    // Fake canvas output: PNG keeps 3 bytes a pixel, JPEG half a byte.
+    vi.stubGlobal("createImageBitmap", async () => ({ width: 1600, height: 1200, close() {} }));
+    vi.stubGlobal(
+      "OffscreenCanvas",
+      class {
+        constructor(
+          readonly width: number,
+          readonly height: number,
+        ) {}
+        getContext = () => ({ drawImage() {} });
+        convertToBlob = async ({ type }: { type: string }) =>
+          new Blob([
+            new Uint8Array((this.width * this.height * (type === "image/jpeg" ? 1 : 6)) / 2),
+          ]);
+      },
+    );
+
+    const attachment = await processAttachment(fileOf(new Uint8Array(7_000_000), "photo.png"));
+
+    const [modelImage] = attachment.images ?? [];
+    expect(modelImage?.mimeType).toBe("image/jpeg");
+    expect(modelImage!.base64.length).toBeLessThanOrEqual(3_500_000);
+    expect(attachment.summary).toBe("1600×1200");
   });
 });
 

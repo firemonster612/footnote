@@ -11,14 +11,14 @@ Use this when slides need numbers: choosing between a chart and a table, picking
 
 ## Choosing a chart type
 
-| Message                                  | Chart                                    |
-| ---------------------------------------- | ---------------------------------------- |
-| Change over time                         | line (many points), column (few periods) |
-| Ranking or comparison across categories  | bar (horizontal), sorted by value        |
-| Part of a whole, 2–5 parts               | pie or doughnut                          |
-| Part of a whole, more parts or over time | stacked column or bar                    |
-| Relationship between two measures        | scatter                                  |
-| Cumulative volume over time              | area                                     |
+| Message                                 | Chart                                    |
+| --------------------------------------- | ---------------------------------------- |
+| Change over time                        | line (many points), column (few periods) |
+| Ranking or comparison across categories | bar (horizontal), sorted by value        |
+| Part of a whole, 2–5 parts              | pie or doughnut                          |
+| Part of a whole, more than 5 parts      | bar (horizontal), sorted by value        |
+| Relationship between two measures       | scatter                                  |
+| Cumulative volume over time             | area                                     |
 
 Avoid pie charts with more than five slices or slices that are close in size; use a sorted bar chart instead. Don't use 3D.
 

@@ -25,10 +25,14 @@ export function ChatView({
   const [notice, setNotice] = useState<Notice>();
   const [dragging, setDragging] = useState(false);
   const [draft, setDraft] = useState("");
+  // Undo/revert and file staging are async; Send waits for both so a request can't overtake them.
+  const [undoing, setUndoing] = useState(false);
+  const [stagingCount, setStagingCount] = useState(0);
   const textareaRef = useRef<HTMLTextAreaElement>(null);
   const showError = (cause: unknown) => setNotice({ tone: "error", text: errorMessage(cause) });
 
   async function stageFiles(files: File[]) {
+    setStagingCount((count) => count + 1);
     for (const file of files) {
       try {
         await session.stageAttachment(file);
@@ -36,26 +40,34 @@ export function ChatView({
         setNotice({ tone: "error", text: `${file.name}: ${errorMessage(cause)}` });
       }
     }
+    setStagingCount((count) => count - 1);
   }
 
-  async function undo() {
+  /** Runs one undo or revert at a time; repeating one would restore the same snapshot twice. */
+  async function runUndo(action: () => Promise<void>) {
+    if (undoing) return;
+    setUndoing(true);
     try {
-      setNotice({ tone: "info", text: formatUndoReport(await session.undoLastTurn()) });
+      await action();
     } catch (cause) {
       showError(cause);
+    } finally {
+      setUndoing(false);
     }
   }
 
-  async function revert(messageTimestamp: number) {
-    try {
+  const undo = () =>
+    runUndo(async () =>
+      setNotice({ tone: "info", text: formatUndoReport(await session.undoLastTurn()) }),
+    );
+
+  const revert = (messageTimestamp: number) =>
+    runUndo(async () => {
       const { text, undo } = await session.revertTo(messageTimestamp);
       setDraft(text);
       setNotice({ tone: "info", text: formatRevertReport(undo) });
       textareaRef.current?.focus();
-    } catch (cause) {
-      showError(cause);
-    }
-  }
+    });
 
   const hasFiles = (event: DragEvent) => event.dataTransfer.types.includes("Files");
 
@@ -83,6 +95,7 @@ export function ChatView({
         session={session}
         tools={tools}
         onRevert={(timestamp) => void revert(timestamp)}
+        undoing={undoing}
       />
       {notice && (
         <div
@@ -109,6 +122,8 @@ export function ChatView({
         models={models}
         onFiles={(files) => void stageFiles(files)}
         onUndo={() => void undo()}
+        undoing={undoing}
+        attaching={stagingCount > 0}
         onSendError={showError}
         text={draft}
         onTextChange={setDraft}
@@ -129,13 +144,14 @@ function formatUndoReport({ restored, removed, warnings }: UndoReport): string {
   );
 }
 
-function formatRevertReport({ restored, removed, warnings }: UndoReport): string {
+export function formatRevertReport({ restored, removed, warnings }: UndoReport): string {
   const changes =
     restored + removed > 0
       ? ` Slides: ${restored} restored, ${removed} removed.`
-      : " No slide changes needed undoing.";
-  return [
-    `Reverted to that request; it's back in the box below.${changes}`,
-    ...warnings.filter((warning) => warning !== "Nothing to undo."),
-  ].join("\n");
+      : warnings.length === 0
+        ? " No slide changes needed undoing."
+        : "";
+  return [`Reverted to that request; it's back in the box below.${changes}`, ...warnings].join(
+    "\n",
+  );
 }

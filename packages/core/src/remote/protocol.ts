@@ -23,9 +23,7 @@ export type AppMethod =
   | "chats.list"
   | "chats.create"
   | "chats.open"
-  | "chats.delete"
-  | "host.call"
-  | "host.runCode";
+  | "chats.delete";
 
 export type SessionMethod = Exclude<keyof ChatSession, "getState" | "subscribe">;
 

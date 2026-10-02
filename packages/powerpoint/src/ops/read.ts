@@ -204,7 +204,10 @@ export const readOps = {
       return { deck, selection, theme, ...(selectedShapes && { selectedShapes }) };
     }),
 
-  /** Index and fingerprint of each listed slide that exists; exports the ones in exportSlideIds (undo snapshots). */
+  /**
+   * Index and fingerprint of each listed slide that exists, read in one run. Also exports the ones in exportSlideIds
+   * when PowerPointApi 1.8 is available (undo snapshots, PPTX edits); without it they come back without base64.
+   */
   get_slide_states: ({
     slideIds,
     exportSlideIds = [],
@@ -213,14 +216,14 @@ export const readOps = {
     exportSlideIds?: string[];
   }): Promise<Record<string, SlideState>> =>
     PowerPoint.run(async (context) => {
-      if (exportSlideIds.length > 0) requireApi("1.8", "Slide snapshots for undo");
+      const exportIds = supportsApi("1.8") ? exportSlideIds : [];
       const all = await loadSlides(context);
       const slides = all.filter(
         (slide) => slideIds.includes(slide.id) || exportSlideIds.includes(slide.id),
       );
       const exports = new Map(
         slides
-          .filter((slide) => exportSlideIds.includes(slide.id))
+          .filter((slide) => exportIds.includes(slide.id))
           .map((slide) => [slide.id, slide.exportAsBase64()]),
       );
       const { outlines } = await readOutlines(context, slides, (slide) => all.indexOf(slide));

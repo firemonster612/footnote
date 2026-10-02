@@ -34,7 +34,7 @@
     },
     "apps/extension": {
       "name": "@footnote/extension",
-      "version": "0.1.0",
+      "version": "0.0.1",
       "dependencies": {
         "@footnote/core": "workspace:*",
         "@footnote/powerpoint": "workspace:*",

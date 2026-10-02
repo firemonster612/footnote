@@ -1,10 +1,10 @@
 import { Check, Copy, RotateCcw } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Tooltip, TooltipContent, TooltipTrigger } from "../components/tooltip.tsx";
+import { useCopy } from "../lib/clipboard.ts";
 import { cn } from "../lib/utils.ts";
 
 const CONFIRM_WINDOW_MS = 4_000;
-const COPIED_FEEDBACK_MS = 1_500;
 
 /** Copy (and, for requests, Revert) under a message. Hidden until the message is hovered or focused. */
 export function MessageActions({
@@ -71,18 +71,13 @@ function ActionButton({
 }
 
 function CopyAction({ text }: { text: string }) {
-  const [copied, setCopied] = useState(false);
-  useEffect(() => {
-    if (!copied) return;
-    const timer = setTimeout(() => setCopied(false), COPIED_FEEDBACK_MS);
-    return () => clearTimeout(timer);
-  }, [copied]);
+  const { copied, copy } = useCopy();
 
   return (
     <ActionButton
       label={copied ? "Copied" : "Copy"}
       tooltip={copied ? "Copied" : "Copy text"}
-      onClick={() => void copyText(text).then(() => setCopied(true))}
+      onClick={() => copy(text)}
     >
       {copied ? <Check size={12} /> : <Copy size={12} />}
       {copied ? "Copied" : "Copy"}
@@ -126,20 +121,4 @@ function RevertAction({
       {armed ? "Confirm revert" : "Revert"}
     </ActionButton>
   );
-}
-
-async function copyText(text: string): Promise<void> {
-  try {
-    await navigator.clipboard.writeText(text);
-  } catch {
-    // Clipboard API refuses when the panel isn't focused; the selection-based copy still works there.
-    const area = document.createElement("textarea");
-    area.value = text;
-    area.style.position = "fixed";
-    area.style.opacity = "0";
-    document.body.append(area);
-    area.select();
-    document.execCommand("copy");
-    area.remove();
-  }
 }

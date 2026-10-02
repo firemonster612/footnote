@@ -193,8 +193,8 @@ const fakeHostModule: HostModule = {
   ops: {},
   systemPrompt: "",
   createTools: () => [
-    fakeTool("get_slide", "Read slide", "read", (args) => "Read slide 3"),
-    fakeTool("render_slide", "Render slide", "read", (args) => "Render slide 3"),
+    fakeTool("get_slide", "Read slide", "read", () => "Read slide 3"),
+    fakeTool("render_slide", "Render slide", "read", () => "Render slide 3"),
     fakeTool(
       "update_shapes",
       "Update shapes",
@@ -238,7 +238,7 @@ class FakeChatSession implements ChatSession {
       (attachment) =>
         ({
           type: "text",
-          text: `<attachment id="${attachment.id}" name="${attachment.name}">…</attachment>`,
+          text: `<attachment id="${attachment.id}" name=${JSON.stringify(attachment.name)}>…</attachment>`,
         }) as const,
     );
     const request = userMessage([{ type: "text", text }, ...attachments]);
@@ -301,7 +301,7 @@ class FakeChatSession implements ChatSession {
     else void this.send(message.text);
   }
 
-  /** Mirrors the runtime: a finished run sends the oldest queued message. */
+  /** Mirrors the runtime: a run that ends normally sends the oldest queued message; abort() leaves the queue. */
   private finishRun(patch: Partial<ChatSessionState>) {
     this.update({ ...patch, isStreaming: false });
     const [next] = this.state.queuedMessages;

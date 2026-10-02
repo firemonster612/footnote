@@ -1,4 +1,4 @@
-import type { ImageContent, TextContent, ToolResultMessage } from "@earendil-works/pi-ai";
+import type { ImageContent, Message, TextContent, ToolResultMessage } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
 import {
   compactionThresholdTokens,
@@ -47,6 +47,14 @@ function assistantCall(id: string): AgentMessage {
   };
 }
 
+function imageCounts(messages: Message[]): number[] {
+  return messages.map((message) =>
+    typeof message.content === "string" || message.role === "system"
+      ? 0
+      : message.content.filter((block) => block.type === "image").length,
+  );
+}
+
 describe("permissions", () => {
   it.each([
     ["read", "ask", false, false],
@@ -91,13 +99,33 @@ describe("messages sent to the model", () => {
       timestamp: 1,
     } as AgentMessage;
     const sent = toLlmMessages([...renders(4), userMessage, ...renders(4)], 3);
-    const imageCounts = sent.map((message) =>
-      typeof message.content === "string" || message.role === "system"
-        ? 0
-        : message.content.filter((block) => block.type === "image").length,
-    );
-    expect(imageCounts).toEqual([0, 1, 1, 1, 0, 1, 1, 1, 1]);
+    expect(imageCounts(sent)).toEqual([0, 1, 1, 1, 0, 1, 1, 1, 1]);
     expect(JSON.stringify(sent[0])).toContain("Earlier image removed");
+  });
+
+  it("counts a steer as part of the run it steered, not as a new turn", () => {
+    const request = (text: string, timestamp: number) =>
+      ({ role: "user", content: [{ type: "text", text }], timestamp }) as AgentMessage;
+    const sent = toLlmMessages(
+      [
+        request("earlier", 1),
+        toolResult([image]),
+        request("run start", 2),
+        toolResult([image]),
+        request("steer", 3),
+        toolResult([image]),
+      ],
+      1,
+      2,
+    );
+    expect(imageCounts(sent)).toEqual([0, 1, 0, 1, 0, 1]);
+  });
+
+  it("keeps only the newest 20 image results within one run", () => {
+    const start = { role: "user", content: "go", timestamp: 1 } as AgentMessage;
+    const renders = Array.from({ length: 22 }, () => toolResult([image]));
+    const sent = toLlmMessages([start, ...renders], 3, 1);
+    expect(imageCounts(sent)).toEqual([0, 0, 0, ...Array<number>(20).fill(1)]);
   });
 
   it("drops all images for models without image input", () => {

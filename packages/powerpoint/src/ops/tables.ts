@@ -1,7 +1,7 @@
 import { guardWrite, textShapeIds } from "./guard.ts";
 import { batchFailureWarning, describeError, requireApi, shapeNotFound } from "./presentation.ts";
 import { type PendingShapeLists, queueShapeLists } from "./shapeReader.ts";
-import { applyFont, readBack, shapeReceipt, withSnapshots } from "./shapes.ts";
+import { applyFont, findCreatedShape, readBack, shapeReceipt, withSnapshots } from "./shapes.ts";
 import type { EditTableArgs, WriteGuardArgs } from "./types.ts";
 
 function createTable(
@@ -77,29 +77,29 @@ export const tableOps = {
       let pending: PendingShapeLists | undefined = queueShapeLists(context, [shapes], "styles", [
         textShapeIds(checked, args.slideId),
       ]);
-      const warnings: string[] = [];
-      let shapeId: string;
+      const warnings = [...checked.warnings];
+      const changed: string[] = [];
       try {
         await context.sync();
-        shapeId = shape.id;
+        changed.push(shape.id);
       } catch (error) {
         pending = undefined;
         if (!args.create) {
-          shapeId = args.shapeId ?? "";
+          changed.push(shape.id);
           warnings.push(batchFailureWarning(error));
         } else {
           // Creation and edits share one batch; a failed edit leaves the new table in place.
-          const after = shapes.load("items/id");
-          await context.sync();
-          const created = after.items.find((item) => !before.has(item.id));
-          if (!created) throw error;
-          shapeId = created.id;
-          warnings.push(
-            `Table ${shapeId} was created but editing it failed: ${describeError(error)}`,
-          );
+          const found = await findCreatedShape(args.slideId, before, error);
+          if ("warning" in found) warnings.push(found.warning);
+          else {
+            changed.push(found.id);
+            warnings.push(
+              `Table ${found.id} was created but editing it failed: ${describeError(error)}`,
+            );
+          }
         }
       }
-      const [read = []] = await readBack(context, [shapes], pending);
-      return withSnapshots(shapeReceipt(args.slideId, read, [shapeId], warnings), checked);
+      const [read = []] = await readBack([args.slideId], pending);
+      return withSnapshots(shapeReceipt(args.slideId, read, changed, warnings), checked);
     }),
 };

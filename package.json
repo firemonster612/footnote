@@ -1,8 +1,11 @@
 {
   "name": "footnote",
   "private": true,
+  "workspaces": [
+    "apps/*",
+    "packages/*"
+  ],
   "type": "module",
-  "workspaces": ["apps/*", "packages/*"],
   "scripts": {
     "lint": "oxlint",
     "format": "oxfmt",

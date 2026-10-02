@@ -2,8 +2,11 @@
 // Office-realm ops for the advanced tools. Keep this file free of agent-side imports (PptxGenJS, JSZip, typebox).
 
 import type { OpRegistry } from "@footnote/core/contracts";
+import { guardWrite } from "../ops/guard.ts";
+import { describeError, moveSelectionOff, readBackFailureWarning } from "../ops/presentation.ts";
+import type { WriteGuardArgs } from "../ops/types.ts";
 
-export interface ReplaceSlideArgs {
+export interface ReplaceSlideArgs extends Pick<WriteGuardArgs, "expectedFingerprints"> {
   slideId: string;
   /** Single-slide PPTX (an edited export of `slideId`). */
   base64: string;
@@ -12,44 +15,61 @@ export interface ReplaceSlideArgs {
 export interface ReplaceSlideResult {
   slideId: string;
   shapes: { id: string; name: string; type: string }[];
+  warnings: string[];
 }
 
 /**
  * Swaps a slide for an edited copy at the same position: inserts the copy right after it, then deletes the original.
- * The copy uses the destination theme because it was exported from this deck.
+ * `expectedFingerprints` holds the slide's fingerprint when it was exported, so a user edit made since then fails the
+ * replace instead of being lost. The copy uses the destination theme because it was exported from this deck.
+ * Once the copy is in, later failures become warnings: the caller must record the copy either way.
  */
-async function replaceSlide({ slideId, base64 }: ReplaceSlideArgs): Promise<ReplaceSlideResult> {
+async function replaceSlide({
+  slideId,
+  base64,
+  expectedFingerprints,
+}: ReplaceSlideArgs): Promise<ReplaceSlideResult> {
   return PowerPoint.run(async (context) => {
-    const slides = context.presentation.slides;
-    slides.load("items/id");
-    await context.sync();
-    const before = new Set(slides.items.map((s) => s.id));
-    if (!before.has(slideId)) throw new Error(`Slide ${slideId} not found`);
+    const checked = await guardWrite(context, [slideId], {
+      ...(expectedFingerprints && { expectedFingerprints }),
+    }).check();
+    const before = new Set(checked.slideIds);
 
     context.presentation.insertSlidesFromBase64(base64, {
       targetSlideId: slideId,
       formatting: "UseDestinationTheme",
     });
-    slides.load("items/id");
+    const slides = context.presentation.slides.load("items/id");
     await context.sync();
     const created = slides.items.filter((s) => !before.has(s.id));
     const replacement = created[0];
     if (created.length !== 1 || !replacement)
       throw new Error(`Expected 1 inserted slide, got ${created.length}`);
 
-    // Deleting the on-screen slide crashes PowerPoint for the web; select the replacement first.
-    if (Office.context.requirements.isSetSupported("PowerPointApi", "1.5")) {
-      context.presentation.setSelectedSlides([replacement.id]);
+    const warnings: string[] = [];
+    try {
+      await moveSelectionOff(
+        context,
+        [...checked.slideIds, replacement.id],
+        [slideId],
+        replacement.id,
+      );
+      context.presentation.slides.getItem(slideId).delete();
       await context.sync();
+    } catch (error) {
+      warnings.push(
+        `The edited copy ${replacement.id} was inserted, but deleting the original slide ${slideId} failed (${describeError(error)}). Delete the original with delete_slides.`,
+      );
+      return { slideId: replacement.id, shapes: [], warnings };
     }
-    slides.getItem(slideId).delete();
-    const shapes = replacement.shapes;
-    shapes.load("items/id,items/name,items/type");
-    await context.sync();
-    return {
-      slideId: replacement.id,
-      shapes: shapes.items.map((s) => ({ id: s.id, name: s.name, type: s.type })),
-    };
+    try {
+      const shapes = replacement.shapes.load("items/id,items/name,items/type");
+      await context.sync();
+      const list = shapes.items.map((s) => ({ id: s.id, name: s.name, type: s.type }));
+      return { slideId: replacement.id, shapes: list, warnings };
+    } catch (error) {
+      return { slideId: replacement.id, shapes: [], warnings: [readBackFailureWarning(error)] };
+    }
   });
 }
 

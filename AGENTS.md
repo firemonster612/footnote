@@ -4,9 +4,10 @@ Model-agnostic assistant that edits Office documents live. PowerPoint first; Wor
 
 ## Layout
 
-- `packages/core`: agent runtime (Pi `@earendil-works/pi-agent-core` 1.0), providers, settings, permissions, context, compaction, attachments, web tools, skills registry, React UI (`src/ui`).
+- `packages/core`: agent runtime (Pi `@earendil-works/pi-agent-core` 1.0), providers, settings, permissions, context, compaction, attachments, web tools, skills registry, the remote app proxy (`src/remote`, how the extension's side panel talks to its engine), React UI (`src/ui`).
 - `packages/powerpoint`: HostModule for PowerPoint. `src/ops` run inside the Office realm (Office.js); `src/tools` run with the agent and call ops via `OfficeHost.call`.
-- `apps/extension`: WXT Chrome MV3 extension. Side panel UI + bridge into the Claude add-in frame (`pivot.claude.ai`).
+- `apps/shell-kit`: code both shells share for the Office realm (running ops and model code) and host deadlines/errors.
+- `apps/extension`: WXT Chrome MV3 extension. Offscreen engine (runs the agent), side panel (view), service worker (chrome.* calls), and bridge/relay content scripts in the Claude add-in frame (`pivot.claude.ai`).
 - `apps/addin`: Vite task-pane add-in with XML manifest.
 
 ## Commands

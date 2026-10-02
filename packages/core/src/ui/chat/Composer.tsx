@@ -10,7 +10,7 @@ import {
   X,
   type LucideIcon,
 } from "lucide-react";
-import { useRef, type RefObject } from "react";
+import { useRef, type Dispatch, type RefObject, type SetStateAction } from "react";
 import type {
   ChatSession,
   ChatSessionState,
@@ -39,6 +39,8 @@ export function Composer({
   models,
   onFiles,
   onUndo,
+  undoing,
+  attaching,
   onSendError,
   text,
   onTextChange,
@@ -49,25 +51,33 @@ export function Composer({
   models: ModelInfo[];
   onFiles: (files: File[]) => void;
   onUndo: () => void;
+  /** An undo or revert is in flight: Undo and Send wait for it. */
+  undoing: boolean;
+  /** Files are still being processed: Send waits so the request includes them. */
+  attaching: boolean;
   onSendError: (cause: unknown) => void;
   /** The draft lives in ChatView so a revert can put the request back here. */
   text: string;
-  onTextChange: (text: string) => void;
+  onTextChange: Dispatch<SetStateAction<string>>;
   textareaRef: RefObject<HTMLTextAreaElement | null>;
 }) {
   const setText = onTextChange;
   const fileInputRef = useRef<HTMLInputElement>(null);
   const currentModel = models.find((model) => model.id === state.modelId);
   const thinkingLevels = currentModel?.thinkingLevels ?? [state.thinkingLevel];
-  const canSend = text.trim() !== "" || state.stagedAttachments.length > 0;
+  const hasContent = text.trim() !== "" || state.stagedAttachments.length > 0;
+  const canSend = hasContent && Boolean(state.modelId) && !undoing && !attaching;
 
   function submit() {
     if (!canSend) return;
     const message = text.trim();
-    // While a run is going, Enter queues; a queued message's Steer button injects it now.
-    if (state.isStreaming) session.queue(message);
-    else session.send(message).catch(onSendError);
     setText("");
+    // While a run is going, Enter queues; a queued message's Steer button injects it now.
+    if (state.isStreaming) return session.queue(message);
+    session.send(message).catch((cause: unknown) => {
+      setText((current) => current || message);
+      onSendError(cause);
+    });
   }
 
   function changeModel(modelId: string) {
@@ -107,7 +117,12 @@ export function Composer({
       )}
       <div className="flex flex-col">
         {state.queuedMessages.length > 0 && (
-          <QueueBar messages={state.queuedMessages} running={state.isStreaming} session={session} />
+          <QueueBar
+            messages={state.queuedMessages}
+            running={state.isStreaming}
+            sendDisabled={undoing}
+            session={session}
+          />
         )}
         <div className="flex flex-col rounded-lg border border-input bg-background shadow-control transition-[border-color,box-shadow] duration-100 hover:border-input-hover has-[textarea:focus]:border-ring has-[textarea:focus]:ring-2 has-[textarea:focus]:ring-ring/20">
           <textarea
@@ -204,14 +219,14 @@ export function Composer({
               ))}
             </ToggleGroup>
             {state.canUndo && !state.isStreaming && (
-              <IconButton icon={Undo2} label="Undo last turn" onClick={onUndo} />
+              <IconButton icon={Undo2} label="Undo last turn" onClick={onUndo} disabled={undoing} />
             )}
             <span className="flex-1" />
             {state.contextUsage && <ContextUsage {...state.contextUsage} />}
             {state.isStreaming && (
               <IconButton icon={Square} label="Stop" onClick={() => session.abort()} />
             )}
-            {(!state.isStreaming || canSend) && (
+            {(!state.isStreaming || hasContent) && (
               <IconButton
                 icon={ArrowUp}
                 label={state.isStreaming ? "Queue message" : "Send"}
@@ -231,10 +246,12 @@ export function Composer({
 function QueueBar({
   messages,
   running,
+  sendDisabled,
   session,
 }: {
   messages: QueuedMessage[];
   running: boolean;
+  sendDisabled: boolean;
   session: ChatSession;
 }) {
   return (
@@ -258,6 +275,7 @@ function QueueBar({
               <Button
                 variant="ghost"
                 className="h-6 shrink-0 px-2"
+                disabled={sendDisabled}
                 onClick={() => session.steerQueued(message.id)}
               >
                 {running ? "Steer" : "Send"}

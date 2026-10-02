@@ -41,9 +41,9 @@ function fakeDeck(): FakeDeck {
 }
 
 /** Tools wired to the real ops through an in-process host, over a fake Office that counts syncs. */
-function setup() {
+function setup(apiVersion?: string) {
   const deck = fakeDeck();
-  const office = installFakeOffice(deck);
+  const office = installFakeOffice(deck, apiVersion);
   const calls: string[] = [];
   const host: OfficeHost = {
     status: async () => ({ connected: true, host: "powerpoint" }),
@@ -90,6 +90,10 @@ const text = (deck: FakeDeck, slideId: string, shapeId: string) =>
 
 const receipt = (result: { content: { type: string; text?: string }[] }) =>
   JSON.parse(result.content[0]!.text!);
+
+const ids = (deck: FakeDeck) => deck.slides.map((slide) => slide.id);
+const titles = (deck: FakeDeck) =>
+  deck.slides.map((slide) => slide.shapes[0]!.textFrame!.textRange.text);
 
 describe("each structured write is one host call with one mutation sync", () => {
   // Before batching every guarded write took 2 host calls and 10-14 syncs, 2-3 of which changed the deck.
@@ -258,6 +262,127 @@ it("undo restores a slide from the snapshot the write exported before changing i
   expect(report.restored).toBe(1);
   expect(deck.slides).toHaveLength(3);
   expect(deck.slides[1]!.shapes[0]!.textFrame!.textRange.text).toBe("Title s2");
+});
+
+describe("writes that committed are never reported as failures", () => {
+  it("add_shape returns the created shape when styling fails and the failed batch can't be read again", async () => {
+    const { measure, read, office, deck } = setup();
+    await read("s2");
+    office.faults.failReadsAfterWrite = true;
+    const { result } = await measure("add_shape", {
+      slideId: "s2",
+      kind: "line",
+      text: "Lines have no text frame",
+      left: 0,
+      top: 0,
+      width: 100,
+      height: 0,
+    });
+    expect(deck.slides[1]!.shapes).toHaveLength(6);
+    expect(receipt(result).warnings[0]).toMatch(/^Shape \d+ was created but styling failed/);
+  });
+
+  it("duplicate_slide keeps the copy for undo when moving it fails", async () => {
+    const { measure, office, deck, module, env } = setup();
+    office.faults.failReadsAfterWrite = true;
+    const { result } = await measure("duplicate_slide", { slideId: "s2", position: 1 });
+    const { changed, warnings } = receipt(result);
+    expect(ids(deck)).toEqual(["s1", "s2", changed[0], "s3"]);
+    expect(warnings[0]).toMatch(/moving it failed/);
+
+    office.faults.failReadsAfterWrite = false;
+    await module.undo.undoLastTurn(env, "chat");
+    expect(ids(deck)).toEqual(["s1", "s2", "s3"]);
+  });
+
+  it("writes proceed without undo snapshots when PowerPointApi 1.8 is missing", async () => {
+    const { measure, read, deck } = setup("1.7");
+    await read("s2");
+    const { result } = await measure("update_shapes", {
+      slides: [{ slideId: "s2", updates: [{ shapeId: "s2-title", text: "Applied" }] }],
+    });
+    expect(text(deck, "s2", "s2-title")).toBe("Applied");
+    expect(receipt(result).warnings).toEqual([expect.stringMatching(/undo/i)]);
+  });
+});
+
+describe("undo", () => {
+  it("puts a moved slide back where it was", async () => {
+    const { measure, module, env, deck } = setup();
+    await module.getContextBlock(env, "chat");
+    await measure("move_slide", { slideId: "s1", position: 3 });
+    expect(ids(deck)).toEqual(["s2", "s3", "s1"]);
+
+    await module.undo.undoLastTurn(env, "chat");
+    expect(titles(deck)).toEqual(["Title s1", "Title s2", "Title s3"]);
+  });
+
+  it("finishes on the next undo after stopping part-way, without leaving copies", async () => {
+    const { measure, read, module, env, office, deck } = setup();
+    await module.getContextBlock(env, "chat");
+    await read("s1", "s3");
+    await measure("update_shapes", {
+      slides: [
+        { slideId: "s1", updates: [{ shapeId: "s1-title", text: "Edited" }] },
+        { slideId: "s3", updates: [{ shapeId: "s3-title", text: "Edited" }] },
+      ],
+    });
+
+    office.faults.failReadsAfterWrite = true;
+    const partial = await module.undo.undoLastTurn(env, "chat");
+    expect(partial.warnings.join(" ")).toMatch(/stopped part-way/);
+    expect(module.undo.canUndo("chat")).toBe(true);
+
+    office.faults.failReadsAfterWrite = false;
+    await module.undo.undoLastTurn(env, "chat");
+    expect(titles(deck)).toEqual(["Title s1", "Title s2", "Title s3"]);
+    expect(module.undo.canUndo("chat")).toBe(false);
+  });
+});
+
+it("delete_slides refuses to delete every slide before changing anything", async () => {
+  const { measure, deck } = setup();
+  await expect(measure("delete_slides", { slideIds: ["s1", "s2", "s3"] })).rejects.toThrow(
+    /every slide/,
+  );
+  expect(ids(deck)).toEqual(["s1", "s2", "s3"]);
+});
+
+it("replace_slide refuses a slide that changed after it was exported", async () => {
+  const { deck } = setup();
+  const states = (await powerpointOps.get_slide_states!({
+    slideIds: ["s2"],
+    exportSlideIds: ["s2"],
+  })) as Record<string, { fingerprint: string; base64: string }>;
+  deck.slides[1]!.shapes[0]!.textFrame!.textRange.text = "Edited by the user";
+  await expect(
+    powerpointOps.replace_slide!({
+      slideId: "s2",
+      base64: states.s2!.base64,
+      expectedFingerprints: { s2: states.s2!.fingerprint },
+    }),
+  ).rejects.toThrow(/changed since you last read it/);
+  expect(ids(deck)).toEqual(["s1", "s2", "s3"]);
+});
+
+describe("code mode helpers", () => {
+  it("textShapes skips placeholders without a text frame", async () => {
+    const { deck } = setup();
+    const picture = fakeShape("s1-picture", { placeholder: "Picture" });
+    delete picture.textFrame;
+    deck.slides[0]!.shapes.push(picture);
+    const found = await PowerPoint.run(async (context) => {
+      const footnote = createFootnoteHelpers(context);
+      return (await footnote.textShapes(footnote.slide(1))).map((shape) => shape.id);
+    });
+    expect(found).toEqual(["s1-title", "s1-body", "s1-note"]);
+  });
+
+  it("deleteSlides moves the selection off the on-screen slide first", async () => {
+    const { deck } = setup();
+    await PowerPoint.run((context) => createFootnoteHelpers(context).deleteSlides(["s2"]));
+    expect(ids(deck)).toEqual(["s1", "s3"]);
+  });
 });
 
 it("code mode: loading every slide first and syncing once at the end lands the edits in one batch", async () => {

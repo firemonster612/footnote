@@ -1,7 +1,17 @@
 // Pure helpers that turn session state into what the message list shows.
 
-import type { ImageContent, TextContent, ToolResultMessage } from "@earendil-works/pi-ai";
-import type { AgentMessage, ApprovalRequest, ThinkingLevel } from "../../contracts.ts";
+import type {
+  AssistantMessage,
+  ImageContent,
+  TextContent,
+  ToolResultMessage,
+} from "@earendil-works/pi-ai";
+import type {
+  AgentMessage,
+  ApprovalRequest,
+  ChatSessionState,
+  ThinkingLevel,
+} from "../../contracts.ts";
 
 export type ToolCallStatus =
   | "awaiting-approval"
@@ -20,6 +30,25 @@ export function indexToolResults(messages: AgentMessage[]): Map<string, ToolResu
 }
 
 /**
+ * The assistant message whose tool calls can still run: the newest one of the running run. Calls without
+ * results in any other message were cut off by a stop and will never run.
+ */
+export function liveAssistantMessage({
+  messages,
+  streamingMessage,
+  isStreaming,
+}: Pick<ChatSessionState, "messages" | "streamingMessage" | "isStreaming">):
+  | AssistantMessage
+  | undefined {
+  if (!isStreaming) return undefined;
+  if (streamingMessage?.role === "assistant") return streamingMessage;
+  const lastUser = messages.findLastIndex((message) => message.role === "user");
+  const lastAssistant = messages.findLastIndex((message) => message.role === "assistant");
+  const message = messages[lastAssistant];
+  return lastAssistant > lastUser && message?.role === "assistant" ? message : undefined;
+}
+
+/**
  * Tool calls run one at a time in order, so only the first call without a result is running (or waiting for
  * approval); the ones after it are queued.
  */
@@ -27,13 +56,13 @@ export function toolCallStatus(
   toolCallId: string,
   result: ToolResultMessage | undefined,
   pendingApprovals: ApprovalRequest[],
-  isStreaming: boolean,
+  inLiveMessage: boolean,
   firstUnfinishedCallId?: string,
 ): ToolCallStatus {
   if (result) return result.isError ? "error" : "done";
   if (pendingApprovals.some((approval) => approval.toolCallId === toolCallId))
     return "awaiting-approval";
-  if (!isStreaming) return "not-run";
+  if (!inLiveMessage) return "not-run";
   return firstUnfinishedCallId === undefined || firstUnfinishedCallId === toolCallId
     ? "running"
     : "queued";
@@ -47,9 +76,8 @@ export interface UserMessageParts {
 
 // Attachment excerpts (attachmentToContent) start with an <attachment name="..."> tag holding a JSON string.
 const attachmentTagPattern = /^<attachment\b[^>]*?\bname=("(?:[^"\\]|\\.)*")/;
-// Per-turn context blocks are for the model only.
-const contextBlockPattern = /^<(deck_state|document_state|context)\b/;
 
+/** Requests are `[typed text, ...attachment blocks]`, so only blocks after the first can be attachments. */
 export function splitUserContent(
   content: string | (TextContent | ImageContent)[],
 ): UserMessageParts {
@@ -57,17 +85,24 @@ export function splitUserContent(
   const texts: string[] = [];
   const attachmentNames: string[] = [];
   const images: ImageContent[] = [];
-  for (const part of content) {
-    if (part.type === "image") {
-      images.push(part);
-      continue;
-    }
-    const trimmed = part.text.trimStart();
-    const attachment = attachmentTagPattern.exec(trimmed);
-    if (attachment) attachmentNames.push(JSON.parse(attachment[1]!));
-    else if (!contextBlockPattern.test(trimmed)) texts.push(part.text);
-  }
+  content.forEach((part, index) => {
+    if (part.type === "image") return void images.push(part);
+    const name = index === 0 ? undefined : attachmentName(part.text);
+    if (name === undefined) texts.push(part.text);
+    else attachmentNames.push(name);
+  });
   return { text: texts.join("\n\n"), attachmentNames, images };
+}
+
+/** The name in an attachment excerpt's tag, or undefined when the text isn't a well-formed excerpt. */
+function attachmentName(text: string): string | undefined {
+  const quoted = attachmentTagPattern.exec(text.trimStart())?.[1];
+  if (quoted === undefined) return undefined;
+  try {
+    return JSON.parse(quoted); // the pattern matched a quoted string, so this parses to a string or throws
+  } catch {
+    return undefined; // typed text that merely looks like a tag, e.g. a Windows path with backslashes
+  }
 }
 
 export const thinkingLevelOrder: ThinkingLevel[] = [

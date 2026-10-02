@@ -1,5 +1,6 @@
 import { afterEach, describe, expect, it } from "vitest";
 import {
+  callOp,
   codeBodySource,
   codeLineOffsets,
   runCodeBody,
@@ -31,5 +32,13 @@ describe("runCodeBody error location", () => {
     expect(run.ok).toBe(false);
     expect(run.error?.message).toContain("(line 3: title.left = 48;)");
     expect(run.slides).toEqual({ before: ["256#1"], after: ["256#1"] });
+  });
+});
+
+describe("callOp", () => {
+  it("runs ops when Office.js has no PowerPoint.RequestContext to count syncs on", async () => {
+    (globalThis as { PowerPoint?: unknown }).PowerPoint = {};
+    const response = await callOp({ ping: async () => "pong" }, "ping", undefined);
+    expect(response).toMatchObject({ ok: true, value: "pong" });
   });
 });

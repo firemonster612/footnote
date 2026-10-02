@@ -5,7 +5,7 @@ import {
   Settings as SettingsIcon,
   Unplug,
 } from "lucide-react";
-import { useCallback, useEffect, useMemo, useState } from "react";
+import { useCallback, useEffect, useMemo, useRef, useState } from "react";
 import type { AttachmentStore, ChatSession, FootnoteApp, OfficeHostStatus } from "../contracts.ts";
 import type { ToolIndex } from "./chat/MessageList.tsx";
 import { ChatView } from "./chat/ChatView.tsx";
@@ -32,12 +32,18 @@ export function FootnoteRoot({ app }: { app: FootnoteApp }) {
   const [session, setSession] = useState<ChatSession>();
   const [chatError, setChatError] = useState<string>();
 
+  const latestLoad = useRef(0);
+
+  /** Shows the loaded chat unless a later load started meanwhile (open A, then B: a slow A mustn't win). */
   const loadSession = useCallback(async (load: () => Promise<ChatSession>) => {
+    const request = ++latestLoad.current;
     try {
-      setSession(await load());
+      const loaded = await load();
+      if (request !== latestLoad.current) return;
+      setSession(loaded);
       setChatError(undefined);
     } catch (cause) {
-      setChatError(errorMessage(cause));
+      if (request === latestLoad.current) setChatError(errorMessage(cause));
     }
   }, []);
 

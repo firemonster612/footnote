@@ -55,7 +55,21 @@ function fileName(url: string): string | undefined {
   }
 }
 
-/** Rejects with a TimeoutError after `timeoutMs` (default 60s) or with the signal's reason on abort. */
+/**
+ * A request reached the Office realm but its answer never came back (stopped, or the bridge dropped), so its edits
+ * may or may not have applied. Matched by `name` across packages, like the TimeoutError of a missed deadline.
+ */
+export class OutcomeUnknownError extends Error {
+  constructor(message: string, options?: ErrorOptions) {
+    super(message, options);
+    this.name = "OutcomeUnknownError";
+  }
+}
+
+/**
+ * Waits for work already sent to the Office realm. Rejects with a TimeoutError after `timeoutMs` (default 60s), or
+ * with an OutcomeUnknownError when the signal aborts.
+ */
 export function withDeadline<T>(
   work: Promise<T>,
   label: string,
@@ -67,7 +81,14 @@ export function withDeadline<T>(
       signal?.removeEventListener("abort", onAbort);
       finish();
     };
-    const onAbort = () => settle(() => reject(signal?.reason));
+    const onAbort = () =>
+      settle(() =>
+        reject(
+          new OutcomeUnknownError(`${label} was stopped before it answered`, {
+            cause: signal?.reason,
+          }),
+        ),
+      );
     const timer = setTimeout(
       () =>
         settle(() =>

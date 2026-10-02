@@ -6,13 +6,11 @@ import {
 } from "@footnote/core/contracts";
 import { Type } from "typebox";
 import { codeHelpersReference } from "../advanced/index.ts";
-import type { WriteGuard } from "../writeGuard.ts";
+import { WRITE_TIMEOUT_MS, type WriteGuard } from "../writeGuard.ts";
 import { defineTool, SlideId } from "./schemas.ts";
 
 const MAX_CODE_CHARS = 20_000;
 const MAX_RESULT_CHARS = 8_000;
-/** PowerPoint for the web applies large batches slowly; a 60s cap reported real, still-landing edits as failures. */
-const CODE_TIMEOUT_MS = 300_000;
 
 const clip = (text: string): string =>
   text.length > MAX_RESULT_CHARS
@@ -60,7 +58,8 @@ Keep each run small: about 150 lines at most. Writing a long script takes the mo
 PowerPoint for the web rules (breaking them fails the run):
 - Batches aren't transactional: when a sync fails, everything queued before the failing statement may already be applied. After an error, read the slide (get_slide) before running again, and make scripts safe to rerun (prefixed shape names + \`footnote.removeShapes\`).
 - Never swallow sync errors (\`.catch(() => {})\`); a failed sync leaves the loaded values unusable and the next statements fail confusingly.
-- Only GeometricShape, TextBox and Placeholder shapes have a \`textFrame\`. Load \`type\` first or use \`footnote.textShapes\`; touching \`textFrame\` on a line, picture, group or table fails the sync.
+- Not every shape has a \`textFrame\`: lines, pictures, groups, tables, and placeholders that hold a picture, chart or table don't, and touching it fails the sync. Use \`footnote.textShapes\`, or (PowerPointApi 1.10) \`shape.getTextFrameOrNullObject()\` and check \`isNullObject\`.
+- Never delete the slide that's on screen: PowerPoint for the web crashes. Delete slides with \`await footnote.deleteSlides(ids)\`, which moves the selection off them first.
 - Don't use a shape after \`delete()\`, and don't \`getItem\` an ID you haven't just loaded; IDs are strings scoped to their slide and change when a slide is re-inserted.
 - Use string enum values ("Ellipse", "SendToBack", "Center"). Colors are "#RRGGBB"; \`fill.transparency\` is 0–1.
 - There is no API for blur, gradients, shadows or glow; draw them with \`footnote.canvasImage\` and an image fill, or say it isn't possible.
@@ -80,19 +79,27 @@ ${codeHelpersReference}`,
     }),
     describeCall: (args: { explanation: string }) => args.explanation,
     async execute(_id, { code, slideIds = [] }, signal) {
-      if (slideIds.length > 0) await guard.checkpoint(slideIds);
+      const warnings = slideIds.length > 0 ? await guard.checkpoint(slideIds) : [];
       const run = await env.host.runCode(code, {
-        timeoutMs: CODE_TIMEOUT_MS,
+        timeoutMs: WRITE_TIMEOUT_MS,
         ...(signal && { signal }),
       });
       const slideChanges = run.slides && diffSlides(run.slides);
-      // Slides the code created join the turn, so undo and revert remove them.
-      if (slideChanges?.created.length)
-        await guard.afterWrite({ createdSlideIds: slideChanges.created });
+      // Created slides join the turn, so undo and revert remove them. After a successful run the listed slides get
+      // fresh fingerprints (deleted ones are skipped), so the next structured write and undo treat the code's edits
+      // as the model's own; after a failure the model has to re-read first anyway.
+      warnings.push(
+        ...(await guard.afterWrite({
+          createdSlideIds: slideChanges?.created ?? [],
+          changedSlideIds: run.ok ? slideIds : [],
+        })),
+      );
+      const text =
+        formatCodeRun(run) +
+        formatSlideChanges(slideChanges, slideIds) +
+        warnings.map((warning) => `\n${warning}`).join("");
       return {
-        content: [
-          { type: "text", text: formatCodeRun(run) + formatSlideChanges(slideChanges, slideIds) },
-        ],
+        content: [{ type: "text", text }],
         details: run,
         ...(!run.ok && { isError: true }),
       };

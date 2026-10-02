@@ -6,10 +6,10 @@ Footnote is a model-agnostic assistant that edits Office documents live. PowerPo
 
 One codebase, two thin loaders. Tool code is pure Office.js and runs wherever Office.js lives.
 
-| Shell | Where the UI runs | Where Office.js runs | Use |
-|---|---|---|---|
-| Extension (Chrome MV3) | Chrome side panel (agent in an offscreen document) | The org-deployed Claude add-in frame (`pivot.claude.ai`), reached by a packaged MAIN-world script | Work tenant without IT |
-| Add-in (XML manifest) | Office task pane | Same page | Personal account, future IT deployment |
+| Shell                  | Where the UI runs                                  | Where Office.js runs                                                                              | Use                                    |
+| ---------------------- | -------------------------------------------------- | ------------------------------------------------------------------------------------------------- | -------------------------------------- |
+| Extension (Chrome MV3) | Chrome side panel (agent in an offscreen document) | The org-deployed Claude add-in frame (`pivot.claude.ai`), reached by a packaged MAIN-world script | Work tenant without IT                 |
+| Add-in (XML manifest)  | Office task pane                                   | Same page                                                                                         | Personal account, future IT deployment |
 
 The UI and agent loop never touch Office objects directly. They call an `OfficeHost` RPC (`call(op, args) -> result`). The add-in shell implements it in-page; the extension shell forwards it to the bridge script in the add-in frame. The bridge only runs packaged code, so the frame's CSP doesn't matter except for raw code execution (see below).
 
@@ -26,8 +26,10 @@ The agent runs in an offscreen document (the engine, `entrypoints/engine`), not 
 ## Packages
 
 ```
-packages/core        agent loop (Pi), providers, settings, permissions, context assembly, compaction, chat UI
-packages/powerpoint  PowerPoint ops (run in the Office realm), tool schemas, deck-state summary, skills
+packages/core        agent loop (Pi), providers, settings, permissions, context assembly, compaction,
+                     attachments, web tools, skills, remote app proxy (src/remote), chat UI (src/ui)
+packages/powerpoint  PowerPoint ops (run in the Office realm), tool schemas, write guard, undo, deck-state summary, skills
+apps/shell-kit       code both shells share: running ops and model code in the Office realm, host deadlines and errors
 apps/extension       WXT: engine (offscreen), side panel view, service worker, bridge content scripts
 apps/addin           Vite: task pane page, manifest.xml
 ```
@@ -45,19 +47,21 @@ Word and Excel become `packages/word` and `packages/excel` with the same shape.
 Hybrid, following Claude Code, Codex, and Claude in Excel: structured tools for everyday work, code for everything else.
 
 **Structured tools** (first cut, pruned by observed use):
+
 - Read: `get_deck` (outline, theme, layouts), `get_slide` (shape tree with IDs, bounds, text, styles), `get_selection`, `render_slide` (image), `get_notes`
 - Write: `add_slide`, `delete_slides`, `move_slide`, `duplicate_slide`, `apply_layout`, `add_shape` (text box / geometric / line / image), `update_shapes` (batch: text, font, fill, line, bounds, z-order, delete), `edit_table` (create / cells / format / rows & columns), `group_shapes`, `set_notes`, `insert_chart` (PptxGenJS), `insert_slides_from_file`
 - Other: `execute_office_js`, `load_skill`, `web_search`, `fetch_page`, `read_attachment`
 
 Every write reads back the affected objects and returns a compact receipt: changed IDs, what was verified, and any partial failure. A write against a slide whose fingerprint changed since the model last read it fails with "re-read slide N", the Office equivalent of Claude Code's read-before-edit check, so the agent can't silently overwrite edits you made mid-turn.
 
-**Code mode** (`execute_office_js`): the model writes an async function body that receives a live `PowerPoint.RequestContext` and a `footnote` helper library (shape lookup by ID, unit conversion, bulk text helpers, read-back). It runs in the Office realm: `new Function` in the add-in shell, `chrome.userScripts.execute` in the extension shell (needs Chrome's "Allow user scripts" toggle; falls back to an error with setup instructions). Limits: 20k characters of code, 8k characters of result, timeout reported as "outcome unknown, re-read before retrying". Our API keys never live in that realm.
+**Code mode** (`execute_office_js`): the model writes an async function body that receives a live `PowerPoint.RequestContext` and a `footnote` helper library (shape lookup by ID, unit conversion, bulk text helpers, read-back). It runs in the Office realm: `new Function` in the add-in shell, `chrome.userScripts.execute` in the extension shell (needs Chrome's "Allow user scripts" toggle; falls back to an error with setup instructions). Limits: 20k characters of code, 8k characters of result, timeout reported as "outcome unknown, re-read before retrying". In the extension, API keys never live in that realm: settings stay in extension storage and model requests leave from the engine. In the add-in shell, code runs in the same page that stores settings, so model code could read the API key; Ask mode always shows the code before it runs.
 
 A QuickJS sandbox with a `footnote.*` RPC API (Codex/Cloudflare style) is the upgrade path if raw code proves risky; it isn't in v1.
 
 ## Permissions
 
 Two modes, chosen per chat; the default is a setting.
+
 - **Ask**: reads, renders, web search and skills run freely. Every document write asks (with "allow writes for this chat"). `execute_office_js` asks every time and shows the code.
 - **Full access**: nothing asks.
 
@@ -74,16 +78,16 @@ Denials go back to the model as a tool result with your comment. The model is to
 
 - Tool results: ~4k-token budget each, with explicit "truncated, N more shapes, call X with offset" notes. Slide renders at most 1280px wide.
 - Old slide renders and large results are replaced with placeholders after they stop being recent (keep the last few).
-- Compaction at the model's window minus output reserve minus ~13k, using Pi's compaction helpers with an Office summary prompt: intent, all user requests, decisions, changed IDs, verification state, outstanding work. Current deck state and loaded skills are re-injected after compaction. A breaker stops repeated compaction loops.
+- Compaction at the model's window minus output reserve minus ~13k, using Pi's compaction helpers with an Office summary prompt: intent, all user requests, decisions, changed IDs, verification state, outstanding work. Current deck state is re-injected after compaction; skills loaded earlier survive only as a mention in the summary, so the model loads them again when it needs them. A breaker stops repeated compaction loops.
 
 ## Checkpoints and undo
 
-Before the first write to a slide in a turn, the agent exports that slide (`exportAsBase64`). "Undo turn" restores exported slides (delete + `insertSlidesFromBase64` at the original index), deletes slides the turn created, and reinserts slides it deleted. Restored slides get new IDs; undo warns if you edited those slides after the turn.
+Before the first write to a slide in a turn, the agent exports that slide (`exportAsBase64`). "Undo turn" re-inserts the exported copies first (`insertSlidesFromBase64`), moves the selection onto a slide that stays, then deletes the slides the copies replace and the slides the turn created, and moves restored copies to their original positions. Deleting first crashes PowerPoint for the web when the deleted slide is on screen. Code runs report the slide list before and after, so slides model code creates are undone too; slides it deletes come back only if the model listed them in `slideIds`. Restored slides get new IDs; undo warns if you edited those slides after the turn.
 
 ## Attachments and web
 
 - Images: model input + insertable. PDF: pdf.js text + page renders. DOCX: mammoth → markdown. XLSX/CSV: SheetJS → tables. PPTX: read content, insert slides.
-- Firecrawl (only with a key): `web_search`, `fetch_page` (markdown), images from URLs insertable.
+- Firecrawl (only with a key): `web_search`, `fetch_page` (markdown). Inserting images straight from a URL isn't wired up yet; images come from attachments.
 
 ## Skills
 

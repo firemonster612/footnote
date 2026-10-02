@@ -1,7 +1,7 @@
 import type { ToolEnv } from "@footnote/core/contracts";
 import type { SlideOutline } from "./ops/types.ts";
 
-const MAX_UNDO_TURNS = 20;
+export const MAX_UNDO_TURNS = 20;
 
 /** Checkpoints of one user turn: slides as they were before the turn first wrote them, and slides it created. */
 export interface Turn {
@@ -19,8 +19,10 @@ export interface ChatState {
   lastOutline?: SlideOutline[];
   lastThemeKey?: string;
   turns: Turn[];
-  /** Every turn begun in this panel session, so a revert can tell "made no changes" from "checkpoints lost on reload". */
+  /** Every turn begun since the engine started, so a revert can tell "made no changes" from "checkpoints lost". */
   seenTurnIds: Set<string>;
+  /** Turns that changed slides but fell out of `turns` past MAX_UNDO_TURNS, so a revert can say why it skips them. */
+  evictedTurnIds: Set<string>;
 }
 
 export const turnHasChanges = (turn: Turn): boolean =>
@@ -40,7 +42,7 @@ export interface ChatRegistry {
   beginTurn(chatId: string, turnId: string): void;
 }
 
-// ToolEnv carries no chat ID, so tools find their chat through the env object getContextBlock was called with,
+// Core sets ToolEnv.chatId; older callers without it fall back to the env object getContextBlock was called with,
 // falling back to the chat whose turn began most recently.
 export function createChatRegistry(): ChatRegistry {
   const chats = new Map<string, ChatState>();
@@ -50,7 +52,7 @@ export function createChatRegistry(): ChatRegistry {
   function get(chatId: string): ChatState {
     let chat = chats.get(chatId);
     if (!chat) {
-      chat = { observed: new Map(), turns: [], seenTurnIds: new Set() };
+      chat = { observed: new Map(), turns: [], seenTurnIds: new Set(), evictedTurnIds: new Set() };
       chats.set(chatId, chat);
     }
     return chat;
@@ -62,16 +64,16 @@ export function createChatRegistry(): ChatRegistry {
       envChats.set(env, chatId);
     },
     forEnv(env: ToolEnv): ChatState {
-      return get(envChats.get(env) ?? activeChatId);
+      return get(env.chatId ?? envChats.get(env) ?? activeChatId);
     },
     beginTurn(chatId: string, turnId: string): void {
       activeChatId = chatId;
       const chat = get(chatId);
       chat.seenTurnIds.add(turnId);
-      chat.turns = [
-        ...chat.turns.filter(turnHasChanges).slice(-(MAX_UNDO_TURNS - 1)),
-        newTurn(turnId),
-      ];
+      const kept = chat.turns.filter(turnHasChanges);
+      const evicted = kept.splice(0, Math.max(0, kept.length - (MAX_UNDO_TURNS - 1)));
+      for (const turn of evicted) chat.evictedTurnIds.add(turn.id);
+      chat.turns = [...kept, newTurn(turnId)];
     },
   };
 }

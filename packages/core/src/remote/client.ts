@@ -34,6 +34,7 @@ interface PendingCall {
 type Hello = Extract<ServerMessage, { type: "hello" }>;
 
 const disconnectedMessage = "Lost the connection to Footnote. Reopen the panel to reconnect.";
+const viewHostCallMessage = "Office calls run in Footnote's engine, not in a view of it.";
 
 /**
  * Resolves once the server has sent its first snapshot. `hostModule` is the view's own copy: the UI reads tool
@@ -169,10 +170,9 @@ export async function connectFootnoteApp(
         statusListeners.add(listener);
         return () => statusListeners.delete(listener);
       },
-      // An abort signal can't cross the port; the timeout can.
-      call: (op, args, options) =>
-        callApp("host.call", op, args, { timeoutMs: options?.timeoutMs }),
-      runCode: (code, options) => callApp("host.runCode", code, { timeoutMs: options?.timeoutMs }),
+      // Tools run in the engine, behind its approvals; a view only shows their results.
+      call: () => Promise.reject(new Error(viewHostCallMessage)),
+      runCode: () => Promise.reject(new Error(viewHostCallMessage)),
     },
     hostModule,
     settings: {

@@ -56,11 +56,16 @@ describe("withDeadline", () => {
     });
   });
 
-  it("rejects with the abort reason", async () => {
+  it("rejects with an OutcomeUnknownError when stopped, since the work was already sent", async () => {
     const controller = new AbortController();
-    const result = withDeadline(new Promise(() => {}), "run", { signal: controller.signal });
-    controller.abort(new Error("stopped"));
-    await expect(result).rejects.toThrow("stopped");
+    const result = withDeadline(new Promise(() => {}), 'Op "add_slide"', {
+      signal: controller.signal,
+    });
+    controller.abort();
+    await expect(result).rejects.toMatchObject({
+      name: "OutcomeUnknownError",
+      message: 'Op "add_slide" was stopped before it answered',
+    });
   });
 });
 

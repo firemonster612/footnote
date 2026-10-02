@@ -53,8 +53,10 @@ export function useModels(app: FootnoteApp, settings: Settings): ModelList {
   const [error, setError] = useState<string>();
   const [loading, setLoading] = useState(false);
   const latestRequest = useRef(0);
+  const fetchedEndpoint = useRef("");
 
   const reload = useCallback(async () => {
+    fetchedEndpoint.current = endpointKey(app.settings.get().endpoint);
     const request = ++latestRequest.current;
     setLoading(true);
     const outcome = await app.models.list().then(
@@ -71,13 +73,18 @@ export function useModels(app: FootnoteApp, settings: Settings): ModelList {
   useEffect(() => {
     // Without a key the proxy just answers 401; keyless servers can still use Test connection.
     if (!baseUrl || !apiKey) return;
-    // Settings save per keystroke; fetch once typing pauses instead of once per character.
-    const timer = setTimeout(() => void reload(), RELOAD_DEBOUNCE_MS);
+    // The URL and key fields save on blur, so tabbing through both changes the endpoint twice in quick
+    // succession. Test connection saves and reloads itself; skip the fetch if it already covered this endpoint.
+    const timer = setTimeout(() => {
+      if (fetchedEndpoint.current !== endpointKey({ baseUrl, apiKey })) void reload();
+    }, RELOAD_DEBOUNCE_MS);
     return () => clearTimeout(timer);
   }, [reload, baseUrl, apiKey]);
 
   return { models, error, loading, reload };
 }
+
+const endpointKey = ({ baseUrl, apiKey }: Settings["endpoint"]) => `${baseUrl}\n${apiKey}`;
 
 export function errorMessage(cause: unknown): string {
   return cause instanceof Error ? cause.message : String(cause);

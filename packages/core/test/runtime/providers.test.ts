@@ -1,3 +1,4 @@
+import { normalizeContext } from "@earendil-works/pi-ai";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { buildModel, isChatModel, toModelInfo } from "../../src/providers/modelCatalog.ts";
 import { createProviderClient } from "../../src/providers/providerClient.ts";
@@ -99,6 +100,30 @@ describe("provider client", () => {
     expect(fetchMock).toHaveBeenLastCalledWith("https://proxy.test/v1/models", {
       headers: { "x-api-key": "secret" },
     });
+  });
+
+  it("streams a resolved model with the key of the endpoint it was resolved at", async () => {
+    const requests: { url: string; headers: Headers }[] = [];
+    vi.stubGlobal("fetch", async (input: string | URL | Request, init?: RequestInit) => {
+      const request = new Request(input, init);
+      requests.push({ url: request.url, headers: request.headers });
+      return request.url.endsWith("/v1/models")
+        ? Response.json(listing)
+        : new Response("stop here", { status: 500 });
+    });
+    let current = settings;
+    const client = createProviderClient(() => current);
+    const model = await client.resolveModel("claude-sonnet-5-5");
+
+    current = { ...settings, endpoint: { baseUrl: "https://other.test", apiKey: "other-secret" } };
+    const stream = await client.streamFn(model, normalizeContext({ messages: [] }), {
+      maxRetryDelayMs: 0,
+    });
+    await stream.result();
+
+    const sent = requests.at(-1)!;
+    expect(new URL(sent.url).host).toBe("proxy.test");
+    expect(sent.headers.get("x-api-key")).toBe("secret");
   });
 
   it("reports HTTP failures with the status and body", async () => {

@@ -26,8 +26,10 @@ export function documentContextMessage(text: string): DocumentContextMessage {
   return { role: "documentContext", text, timestamp: Date.now() };
 }
 
-/** How many image-bearing messages from earlier turns keep their images; the current turn always keeps its own. */
+/** How many image-bearing messages from earlier turns keep their images. */
 export const recentImageMessages = 3;
+/** How many image-bearing messages the current run keeps, newest first, so a long render loop can't fill the window. */
+const currentRunImageMessages = 20;
 
 const imagePlaceholder: TextContent = {
   type: "text",
@@ -35,14 +37,20 @@ const imagePlaceholder: TextContent = {
 };
 
 /**
- * Converts the transcript to provider messages: custom messages become user text. Images from the current turn
- * (since the last user message) always survive, so a model that renders several slides sees all of them; images
- * from earlier turns survive only in the newest `keepImageMessages` messages that carry any. 0 drops every image,
- * for models without image input.
+ * Converts the transcript to provider messages: custom messages become user text. The current run starts at the
+ * request sent at `runStart` (steers within the run don't start a new one); without it, at the last user message.
+ * The run's newest 20 image-bearing messages keep their images, so a model that renders several slides sees them;
+ * images from earlier turns survive only in the newest `keepImageMessages` messages that carry any. 0 drops every
+ * image, for models without image input.
  */
-export function toLlmMessages(messages: AgentMessage[], keepImageMessages: number): Message[] {
-  const currentTurnStart = messages.findLastIndex((message) => message.role === "user");
+export function toLlmMessages(
+  messages: AgentMessage[],
+  keepImageMessages: number,
+  runStart?: number,
+): Message[] {
+  const currentRunStart = runStartIndex(messages, runStart);
   let earlierImageMessagesSeen = 0;
+  let currentImageMessagesSeen = 0;
   const converted: Message[] = [];
   for (let index = messages.length - 1; index >= 0; index -= 1) {
     const message = messages[index]!;
@@ -51,10 +59,11 @@ export function toLlmMessages(messages: AgentMessage[], keepImageMessages: numbe
       (llmMessage.role === "user" || llmMessage.role === "toolResult") &&
       hasImages(llmMessage.content);
     if (carriesImages) {
-      const inCurrentTurn = index >= currentTurnStart;
-      if (!inCurrentTurn) earlierImageMessagesSeen += 1;
       const keep =
-        keepImageMessages > 0 && (inCurrentTurn || earlierImageMessagesSeen <= keepImageMessages);
+        keepImageMessages > 0 &&
+        (index >= currentRunStart
+          ? ++currentImageMessagesSeen <= currentRunImageMessages
+          : ++earlierImageMessagesSeen <= keepImageMessages);
       if (!keep) {
         converted.push({
           ...llmMessage,
@@ -66,6 +75,15 @@ export function toLlmMessages(messages: AgentMessage[], keepImageMessages: numbe
     converted.push(llmMessage);
   }
   return converted.reverse();
+}
+
+/** Where the current run starts. A run start compacted away means everything left belongs to the run. */
+function runStartIndex(messages: AgentMessage[], runStart: number | undefined): number {
+  if (runStart === undefined) return messages.findLastIndex((message) => message.role === "user");
+  const index = messages.findIndex(
+    (message) => message.role === "user" && message.timestamp === runStart,
+  );
+  return Math.max(index, 0);
 }
 
 function toLlmMessage(message: AgentMessage): Message {
