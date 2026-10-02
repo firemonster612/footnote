@@ -100,6 +100,8 @@ export type FootnoteTool<TParameters extends TSchema = TSchema, TDetails = any> 
 
 /** Everything a tool may need at execution time. Built per chat by core. */
 export interface ToolEnv {
+  /** The chat whose tools these are. Absent in envs built outside a chat session. */
+  chatId?: string;
   host: OfficeHost;
   attachments: AttachmentStore;
   settings: () => Settings;

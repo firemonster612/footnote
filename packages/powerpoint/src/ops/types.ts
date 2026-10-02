@@ -127,6 +127,21 @@ export interface AddSlideReceipt extends WriteReceipt {
   shapes: Pick<ShapeInfo, "id" | "name" | "placeholder" | "left" | "top" | "width" | "height">[];
 }
 
+export interface RestoreArgs {
+  /** Slides to remove: the ones the turn created or changed (changed ones come back from `inserts`). */
+  deleteSlideIds: string[];
+  /** Snapshots to re-insert, at the indexes they had before the turn. */
+  inserts: ({ slideId: string } & SlideSnapshot)[];
+}
+
+export interface RestoreResult {
+  removedSlideIds: string[];
+  /** Original slide ID → ID of its re-inserted copy (copies always get new IDs), for every copy that landed. */
+  idMap: Record<string, string>;
+  /** Set when restoring stopped part-way; everything before the failure stays applied. */
+  error?: string;
+}
+
 export type InsertFormatting = "KeepSourceFormatting" | "UseDestinationTheme";
 
 /** Passed to every write op that edits existing slides; the op checks and exports inside its own PowerPoint.run. */

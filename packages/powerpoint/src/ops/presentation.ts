@@ -67,10 +67,13 @@ export function batchFailureWarning(error: unknown): string {
   return `PowerPoint rejected part of this write (${describeError(error)}); the edits before the failing one may have applied. The read-back shows the current state; fix what's missing rather than repeating the whole write.`;
 }
 
+export const DELETE_EVERY_SLIDE_MESSAGE =
+  "Can't delete every slide: a deck needs at least one, and deleting the slide on screen crashes PowerPoint for the web. Add the replacement slides first, then delete these.";
+
 /**
  * PowerPoint for the web crashes its editor ("Sorry, we ran into a problem") when the API deletes the slide that's
- * open on screen. Select a slide that's staying, in its own sync, before deleting.
- * `slideIds` is the deck as it is now, in order.
+ * open on screen. Select a slide that's staying, in its own sync, before deleting; throws, before anything changes,
+ * when no slide would stay. `slideIds` is the deck as it is now, in order.
  */
 export async function moveSelectionOff(
   context: PowerPoint.RequestContext,
@@ -78,10 +81,11 @@ export async function moveSelectionOff(
   deleting: string[],
   preferredId?: string,
 ): Promise<void> {
-  if (deleting.length === 0 || !supportsApi("1.5")) return;
+  if (deleting.length === 0) return;
   const staying = slideIds.filter((id) => !deleting.includes(id));
   const target = preferredId && staying.includes(preferredId) ? preferredId : staying[0];
-  if (!target) return;
+  if (!target) throw new Error(DELETE_EVERY_SLIDE_MESSAGE);
+  if (!supportsApi("1.5")) return;
   context.presentation.setSelectedSlides([target]);
   await context.sync();
 }

@@ -1,16 +1,18 @@
-// Live smoke test against CLIProxyAPI: `bun packages/core/test/runtime/liveSmoke.ts [modelId:level ...]`.
-// Streams text and runs one tool call per model through createFootnoteApp, and checks the requested effort reached
-// the request body. Reads the API key from the local CLIProxyAPI config at runtime; never prints it.
+// Live smoke test against a real endpoint: `FOOTNOTE_ENDPOINT=http://localhost:8317 FOOTNOTE_API_KEY=… bun
+// packages/core/test/runtime/liveSmoke.ts [modelId:level ...]`. Streams text and runs one tool call per model through
+// createFootnoteApp, and checks the requested effort reached the request body. Without FOOTNOTE_API_KEY it reads the
+// first key from a local CLIProxyAPI config; it never prints the key.
 import { readFileSync } from "node:fs";
 import { homedir } from "node:os";
 import { createFootnoteApp, type ThinkingLevel } from "../../src/index.ts";
 import { fakeHost, fakeHostModule, memoryStore } from "./fakes.ts";
 
-const baseUrl = "http://100.87.14.125:8317";
+const baseUrl = process.env.FOOTNOTE_ENDPOINT ?? "http://localhost:8317";
 const targets =
   process.argv.length > 2 ? process.argv.slice(2) : ["claude-sonnet-5-5:low", "gpt-6-luna:high"];
 
 function readApiKey(): string {
+  if (process.env.FOOTNOTE_API_KEY) return process.env.FOOTNOTE_API_KEY;
   const lines = readFileSync(`${homedir()}/.local/share/cliproxy-api/config.yaml`, "utf8").split(
     "\n",
   );

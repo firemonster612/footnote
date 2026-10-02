@@ -3,6 +3,7 @@ import {
   Agent,
   type AgentContext,
   type AgentLoopTurnUpdate,
+  type BeforeToolCallResult,
   type PrepareNextTurnContext,
 } from "@earendil-works/pi-agent-core";
 import {
@@ -53,6 +54,18 @@ import type { ChatRecord, ChatStore } from "../storage/chatStore.ts";
 import { createSkillTool, formatSkillListing } from "../skills/index.ts";
 import { createWebTools } from "../web/index.ts";
 
+/** A session as the engine holds it. */
+export interface LiveChatSession extends ChatSession {
+  /** Stops the run and every later save, so deleting the chat afterwards sticks. */
+  dispose(): void;
+}
+
+interface QueuedRequest {
+  id: string;
+  text: string;
+  attachmentIds: string[];
+}
+
 export interface ChatSessionDeps {
   record: ChatRecord;
   host: OfficeHost;
@@ -86,13 +99,14 @@ export function createChatSession({
   provider,
   chatStore,
   skills,
-}: ChatSessionDeps): ChatSession {
+}: ChatSessionDeps): LiveChatSession {
   const chatId = record.id;
   const attachments = createAttachmentStore();
-  const env: ToolEnv = { host, attachments, settings: settings.get };
+  const env: ToolEnv = { chatId, host, attachments, settings: settings.get };
   // Host tools may keep per-chat state (e.g. last-read fingerprints), so they live as long as the session.
+  const hostTools = hostModule.createTools(env);
   const sessionTools: FootnoteTool[] = [
-    ...hostModule.createTools(env),
+    ...hostTools,
     createSkillTool(skills),
     createAttachmentTool(env),
   ];
@@ -105,10 +119,18 @@ export function createChatSession({
   let model: Model<Api> | undefined;
   let error: string | undefined;
   let stagedIds: string[] = [];
-  let queued: { id: string; text: string; attachmentIds: string[] }[] = [];
-  // Labels that resolved a slide position never change; ones that fell back to a raw ID are retried each time.
+  let queued: QueuedRequest[] = [];
+  // Steers handed to Pi during the current run; ones the model never received go back to the queue when it ends.
+  let steers: { message: UserMessage; request: QueuedRequest }[] = [];
+  // Labels that resolved a slide position never change; ones that fell back to a raw ID are retried when the
+  // transcript changes (a new deck state may resolve them).
   const settledLabels = new Map<string, string>();
   const rawSlideId = /\d+#\d+/;
+  let committedLabels: {
+    count: number;
+    last: AgentMessage | undefined;
+    labels: Record<string, string>;
+  } = { count: -1, last: undefined, labels: {} };
   // Chats saved before turn tracking: treat every request as a turn start. Their turn IDs are unknown to the
   // host, so reverting them reports that the slide changes can't be undone.
   let turnStarts =
@@ -122,6 +144,12 @@ export function createChatSession({
   let turnCount = 0;
   // Set between send() starting and the agent run starting, so a second send steers instead of racing.
   let startingRun: AbortController | undefined;
+  // Set while a revert or undo restores the document. Requests queue behind it and start once it's done.
+  let restoring = false;
+  let queuedWhileRestoring = false;
+  let disposed = false;
+  // A chat is stored from its first request on; one that never had a request isn't worth a record.
+  let stored = record.messages.length > 0;
   const compactionBreaker = createCompactionBreaker();
 
   const permissions = createPermissionGate(
@@ -133,7 +161,11 @@ export function createChatSession({
   );
 
   const toLlm = (messages: AgentMessage[]) =>
-    toLlmMessages(messages, model?.input.includes("image") ? recentImageMessages : 0);
+    toLlmMessages(
+      messages,
+      model?.input.includes("image") ? recentImageMessages : 0,
+      turnStarts.at(-1)?.messageTimestamp,
+    );
 
   const agent = new Agent({
     initialState: {
@@ -146,7 +178,10 @@ export function createChatSession({
     convertToLlm: toLlm,
     beforeToolCall: async ({ toolCall, args }, signal) => {
       const tool = tools.find((candidate) => candidate.name === toolCall.name);
-      return tool ? permissions.check(tool, toolCall, args, signal) : undefined;
+      if (!tool) return undefined;
+      const decision = await permissions.check(tool, toolCall, args, signal);
+      if (decision?.block || !hostTools.includes(tool)) return decision;
+      return blockIfDocumentChanged();
     },
     afterToolCall: async ({ result }) => {
       const content = capToolResultText(result.content);
@@ -162,8 +197,10 @@ export function createChatSession({
     if (event.type === "turn_end") turnCount += 1;
     if (event.type !== "message_update") updateContextTokens();
     notify();
-    // Not awaited: Pi awaits listeners, and saving shouldn't hold up the run. Saves are queued in order.
-    if (event.type === "turn_end" || event.type === "agent_end") void persist();
+    // Not awaited: Pi awaits listeners, and saving shouldn't hold up the run. Saves are queued in order. A request
+    // is saved as it lands, so a panel reopened mid-run lists the chat.
+    const requestLanded = event.type === "message_end" && event.message.role === "user";
+    if (requestLanded || event.type === "turn_end" || event.type === "agent_end") void persist();
   });
 
   const listeners = new Set<(state: ChatSessionState) => void>();
@@ -187,9 +224,9 @@ export function createChatSession({
       thinkingLevel,
       stagedAttachments: attachmentMetas(stagedIds),
       revertibleRequests: turnStarts.map((start) => start.messageTimestamp),
-      toolCallLabels: toolCallLabels(
-        streamingMessage ? [...agent.state.messages, streamingMessage] : agent.state.messages,
-      ),
+      toolCallLabels: streamingMessage
+        ? { ...transcriptLabels(), ...toolCallLabels([streamingMessage]) }
+        : transcriptLabels(),
       queuedMessages: queued.map(({ id, text, attachmentIds }) => ({
         id,
         text,
@@ -204,6 +241,18 @@ export function createChatSession({
     };
   }
 
+  /** Labels for the transcript's tool calls, rebuilt only when the transcript changed (not per streaming delta). */
+  function transcriptLabels(): Record<string, string> {
+    const messages = agent.state.messages;
+    if (committedLabels.count !== messages.length || committedLabels.last !== messages.at(-1)) {
+      committedLabels = {
+        count: messages.length,
+        last: messages.at(-1),
+        labels: toolCallLabels(messages),
+      };
+    }
+    return committedLabels.labels;
+  }
 
   function toolCallLabels(messages: AgentMessage[]): Record<string, string> {
     const labels: Record<string, string> = {};
@@ -217,9 +266,9 @@ export function createChatSession({
           continue;
         }
         const tool = tools.find((candidate) => candidate.name === part.name);
-        if (!tool?.describeCall) continue;
+        if (!tool) continue;
         try {
-          const label = tool.describeCall(part.arguments);
+          const label = tool.describeCall?.(part.arguments) ?? tool.label;
           labels[part.id] = label;
           if (!rawSlideId.test(label)) settledLabels.set(part.id, label);
         } catch {
@@ -244,8 +293,10 @@ export function createChatSession({
   }
 
   async function persist() {
+    if (disposed) return;
     const messages = agent.state.messages.filter((message) => message.role !== "system");
-    if (messages.length === 0) return;
+    if (!stored && messages.length === 0) return;
+    stored = true;
     const { mode, writesAllowed } = permissions.state();
     try {
       await chatStore.put({
@@ -264,6 +315,28 @@ export function createChatSession({
       error = `Couldn't save this chat: ${errorText(cause)}`;
       notify();
     }
+  }
+
+  /** Blocks document tools once the chat's tab shows another document. A disconnected host may come back to this one. */
+  async function blockIfDocumentChanged(): Promise<BeforeToolCallResult | undefined> {
+    const { connected, documentId } = await host.status();
+    // An unsaved deck (add-in IDs like "unsaved-<uuid>") gets its real ID when saved; that's the same document.
+    const savedSinceStart = record.documentId.startsWith("unsaved-");
+    if (!connected || !documentId || documentId === record.documentId || savedSinceStart)
+      return undefined;
+    return {
+      block: true,
+      reason:
+        "The tab this chat runs in now shows a different document, so document tools are blocked. Ask the user to switch back to the original document, or to start a new chat in this one.",
+    };
+  }
+
+  /** The skill listing is part of the system prompt; skills added or removed since the last run update it. */
+  function refreshSystemPrompt() {
+    const [leading, ...rest] = agent.state.messages;
+    const systemPrompt = buildSystemPrompt(hostModule.systemPrompt, formatSkillListing(skills()));
+    if (leading?.role !== "system" || leading.content === systemPrompt) return;
+    agent.state.messages = [{ ...leading, content: systemPrompt }, ...rest];
   }
 
   /** The host's current state block, unless it repeats the newest one already in the transcript. */
@@ -379,19 +452,66 @@ export function createChatSession({
     return agent.state.isStreaming || startingRun !== undefined;
   }
 
-  /** A run that ended normally hands over to the next queued message; a stopped or failed run leaves the queue for the user. */
-  function sendNextQueued() {
+  function isBusy(): boolean {
+    return isRunning() || restoring;
+  }
+
+  function assertIdle(action: string) {
+    if (isRunning()) throw new Error(`Stop the response before ${action}.`);
+    if (restoring) throw new Error(`Wait for the current undo to finish before ${action}.`);
+  }
+
+  /** A stopped or failed run leaves the queue for the user; only a run that ended normally hands over. */
+  function endedNormally(): boolean {
     const lastMessage = agent.state.messages.at(-1);
-    const endedNormally =
+    return (
       error === undefined &&
       !(
         lastMessage?.role === "assistant" &&
         (lastMessage.stopReason === "aborted" || lastMessage.stopReason === "error")
-      );
-    const next = queued[0];
-    if (!endedNormally || !next || isRunning()) return;
-    queued = queued.slice(1);
+      )
+    );
+  }
+
+  function startNextQueued() {
+    const [next, ...rest] = queued;
+    if (!next || isBusy() || disposed) return;
+    queued = rest;
     void startRun(next.text, next.attachmentIds);
+  }
+
+  function steerNow(text: string, attachmentIds: string[]) {
+    const message = userMessage(text, attachmentIds);
+    steers = [...steers, { message, request: { id: crypto.randomUUID(), text, attachmentIds } }];
+    agent.steer(message);
+    notify();
+  }
+
+  /** Pi keeps undelivered steers across a stop; take them back so the next run doesn't send them unseen. */
+  function takeUndeliveredSteers(): QueuedRequest[] {
+    const delivered = new Set(
+      agent.state.messages.flatMap((message) =>
+        message.role === "user" ? [message.timestamp] : [],
+      ),
+    );
+    const undelivered = steers.filter(({ message }) => !delivered.has(message.timestamp));
+    steers = [];
+    agent.clearSteeringQueue();
+    return undelivered.map(({ request }) => request);
+  }
+
+  /** Runs a revert or undo with sends queued behind it; ones sent meanwhile start when it's done. */
+  async function restore<T>(work: () => Promise<T>): Promise<T> {
+    restoring = true;
+    try {
+      return await work();
+    } finally {
+      restoring = false;
+      if (queuedWhileRestoring) {
+        queuedWhileRestoring = false;
+        startNextQueued();
+      }
+    }
   }
 
   async function startRun(text: string, attachmentIds: string[] = takeStagedIds()) {
@@ -399,6 +519,8 @@ export function createChatSession({
     startingRun = starting;
     error = undefined;
     notify();
+    // A request stopped before its run started goes back to the front of the queue instead of vanishing.
+    let unstarted: QueuedRequest[] = [];
     try {
       if (!modelId) throw new Error("Choose a model first.");
       model = await provider.resolveModel(modelId);
@@ -407,6 +529,16 @@ export function createChatSession({
       agent.state.model = model;
       agent.state.thinkingLevel = thinkingLevel;
       agent.state.tools = tools;
+      refreshSystemPrompt();
+      const compacted = await compactIfNeeded(agent.state.messages, starting.signal);
+      if (compacted) agent.state.messages = compacted;
+      const documentContext = await freshDocumentContext(agent.state.messages);
+      if (starting.signal.aborted) {
+        // Stopping isn't an error, even if it cut a compaction short.
+        error = undefined;
+        unstarted = [{ id: crypto.randomUUID(), text, attachmentIds }];
+        return;
+      }
 
       const turnId = crypto.randomUUID();
       hostModule.undo.beginTurn(chatId, turnId);
@@ -414,47 +546,41 @@ export function createChatSession({
       turnStarts = [...turnStarts, { messageTimestamp: prompt.timestamp, turnId }];
       if (!agent.state.messages.some((message) => message.role === "user"))
         title = titleFrom(text) ?? title;
-      const compacted = await compactIfNeeded(agent.state.messages, starting.signal);
-      if (compacted) agent.state.messages = compacted;
-      const documentContext = await freshDocumentContext(agent.state.messages);
-      if (starting.signal.aborted) return;
       startingRun = undefined;
       await agent.prompt(documentContext ? [prompt, documentContext] : [prompt]);
     } catch (cause) {
       error = errorText(cause);
     } finally {
       startingRun = undefined;
+      queued = [...unstarted, ...takeUndeliveredSteers(), ...queued];
       notify();
     }
-    sendNextQueued();
+    if (endedNormally()) startNextQueued();
   }
 
-  const session: ChatSession = {
+  const session: LiveChatSession = {
     getState: () => snapshot,
     subscribe(listener) {
       listeners.add(listener);
       return () => listeners.delete(listener);
     },
     send(text) {
-      if (isRunning()) {
+      if (isBusy()) {
         session.queue(text);
         return Promise.resolve();
       }
       return startRun(text);
     },
     steer(text) {
-      if (!isRunning()) {
-        void startRun(text);
-        return;
-      }
-      agent.steer(userMessage(text, takeStagedIds()));
-      notify();
+      if (isRunning()) steerNow(text, takeStagedIds());
+      else session.queue(text);
     },
     queue(text) {
-      if (!isRunning()) {
+      if (!isBusy()) {
         void startRun(text);
         return;
       }
+      if (restoring) queuedWhileRestoring = true;
       queued = [...queued, { id: crypto.randomUUID(), text, attachmentIds: takeStagedIds() }];
       notify();
     },
@@ -467,19 +593,19 @@ export function createChatSession({
     },
     steerQueued(id) {
       const message = queued.find((candidate) => candidate.id === id);
-      if (!message) return;
+      if (!message || restoring) return;
       queued = queued.filter((candidate) => candidate !== message);
-      if (isRunning()) {
-        agent.steer(userMessage(message.text, message.attachmentIds));
-        notify();
-      } else {
-        void startRun(message.text, message.attachmentIds);
-      }
+      if (isRunning()) steerNow(message.text, message.attachmentIds);
+      else void startRun(message.text, message.attachmentIds);
     },
     abort() {
       // Aborting the run's signal also cancels pending approvals (see PermissionGate.check).
       startingRun?.abort();
       agent.abort();
+    },
+    dispose() {
+      disposed = true;
+      session.abort();
     },
     resolveApproval: (approvalId, decision) => permissions.resolveApproval(approvalId, decision),
     setPermissionMode: (mode) => permissions.setMode(mode),
@@ -508,46 +634,55 @@ export function createChatSession({
       notify();
     },
     async revertTo(messageTimestamp) {
-      if (isRunning()) throw new Error("Stop the response before reverting.");
-      const index = agent.state.messages.findIndex(
-        (message) => message.role === "user" && message.timestamp === messageTimestamp,
-      );
-      const request = agent.state.messages[index];
-      if (!request || request.role !== "user")
-        throw new Error("That message is no longer in this chat.");
-      if (!turnStarts.some((start) => start.messageTimestamp === messageTimestamp))
-        throw new Error(
-          "Only requests that started a turn can be reverted; this one steered a running task.",
-        );
-      const undoTurnIds = turnStarts
-        .filter((start) => start.messageTimestamp >= messageTimestamp)
-        .map((start) => start.turnId);
-      // Undo first: if the document can't be restored, keep the chat as it is rather than half-reverting.
-      const undo = await hostModule.undo.undoTurns(env, chatId, undoTurnIds);
-      agent.state.messages = agent.state.messages.slice(0, index);
-      turnStarts = turnStarts.filter((start) => start.messageTimestamp < messageTimestamp);
-      error = undefined;
-      notify();
-      await persist();
-      const text =
-        typeof request.content === "string"
-          ? request.content
-          : (request.content.find((block) => block.type === "text")?.text ?? "");
-      return { text, undo };
+      assertIdle("reverting");
+      return restore(() => revertTo(messageTimestamp));
     },
     async undoLastTurn() {
-      if (agent.state.isStreaming) throw new Error("Stop the response before undoing.");
-      const report = await hostModule.undo.undoLastTurn(env, chatId);
-      agent.state.messages = [
-        ...agent.state.messages,
-        documentContextMessage(
-          `<undo>The user undid the document changes from the previous turn (${report.restored} restored, ${report.removed} removed). Don't redo them unless asked.</undo>`,
-        ),
-      ];
-      notify();
-      await persist();
-      return report;
+      assertIdle("undoing");
+      return restore(undoLastTurn);
     },
   };
+
+  async function revertTo(messageTimestamp: number) {
+    const index = agent.state.messages.findIndex(
+      (message) => message.role === "user" && message.timestamp === messageTimestamp,
+    );
+    const request = agent.state.messages[index];
+    if (!request || request.role !== "user")
+      throw new Error("That message is no longer in this chat.");
+    if (!turnStarts.some((start) => start.messageTimestamp === messageTimestamp))
+      throw new Error(
+        "Only requests that started a turn can be reverted; this one steered a running task.",
+      );
+    const undoTurnIds = turnStarts
+      .filter((start) => start.messageTimestamp >= messageTimestamp)
+      .map((start) => start.turnId);
+    // Undo first: if the document can't be restored, keep the chat as it is rather than half-reverting.
+    const undo = await hostModule.undo.undoTurns(env, chatId, undoTurnIds);
+    agent.state.messages = agent.state.messages.slice(0, index);
+    turnStarts = turnStarts.filter((start) => start.messageTimestamp < messageTimestamp);
+    error = undefined;
+    notify();
+    await persist();
+    const text =
+      typeof request.content === "string"
+        ? request.content
+        : (request.content.find((block) => block.type === "text")?.text ?? "");
+    return { text, undo };
+  }
+
+  async function undoLastTurn() {
+    const report = await hostModule.undo.undoLastTurn(env, chatId);
+    agent.state.messages = [
+      ...agent.state.messages,
+      documentContextMessage(
+        `<undo>The user undid the document changes from the previous turn (${report.restored} restored, ${report.removed} removed). Don't redo them unless asked.</undo>`,
+      ),
+    ];
+    notify();
+    await persist();
+    return report;
+  }
+
   return session;
 }

@@ -1,5 +1,5 @@
 import { Type } from "typebox";
-import { defineTool } from "../attachments/define-tool.ts";
+import { defineTool } from "../tools/defineTool.ts";
 import type { FootnoteTool, SkillDefinition } from "../contracts.ts";
 
 const parameters = Type.Object({

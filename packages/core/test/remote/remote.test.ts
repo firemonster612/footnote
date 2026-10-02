@@ -15,15 +15,18 @@ function portPair() {
   });
   const a = end();
   const b = end();
+  /** Every message the server posted, in order. */
+  const fromServer: { type: string }[] = [];
   const port = (self: typeof a, other: typeof a): RemotePort<any, any> => ({
     postMessage(message) {
-      const copy: unknown = JSON.parse(JSON.stringify(message));
+      const copy = JSON.parse(JSON.stringify(message));
+      if (self === a) fromServer.push(copy);
       setTimeout(() => other.messageListeners.forEach((listener) => listener(copy)));
     },
     onMessage: { addListener: (listener) => void self.messageListeners.push(listener) },
     onDisconnect: { addListener: (listener) => void self.disconnectListeners.push(listener) },
   });
-  return { server: port(a, b), client: port(b, a) };
+  return { server: port(a, b), client: port(b, a), fromServer };
 }
 
 async function servedApp() {
@@ -50,7 +53,7 @@ async function servedApp() {
   const ports = portPair();
   void serveFootnoteApp(app, ports.server);
   const remote = await connectFootnoteApp(ports.client, harness.hostModule);
-  return { harness, app, sessions, remote };
+  return { harness, app, sessions, remote, fromServer: ports.fromServer };
 }
 
 describe("remote app", () => {
@@ -60,6 +63,8 @@ describe("remote app", () => {
     const session = await remote.chats.create("doc-1");
     const seen: boolean[] = [];
     session.subscribe((state) => seen.push(state.isStreaming));
+    // Someone typing takes longer than the push throttle, so the run's start is pushed at once.
+    await new Promise((resolve) => setTimeout(resolve, 60));
 
     await session.send("Hi");
 
@@ -134,5 +139,28 @@ describe("remote app", () => {
       "assistant",
     ]);
     await expect(session.revertTo(12345)).rejects.toThrow("no longer in this chat");
+  });
+
+  it("coalesces a burst of state changes into at most a leading and a trailing push", async () => {
+    const { sessions, remote, fromServer } = await servedApp();
+    const session = await remote.chats.create("doc-1");
+    const served = sessions.get(session.getState().id)!;
+    const pushesBefore = fromServer.filter((message) => message.type === "session").length;
+
+    for (let i = 0; i < 10; i += 1) {
+      served.setThinkingLevel("low");
+      served.setThinkingLevel("high");
+    }
+    await new Promise((resolve) => setTimeout(resolve, 100));
+
+    const pushes = fromServer.filter((message) => message.type === "session").length;
+    expect(pushes - pushesBefore).toBeLessThanOrEqual(2);
+    expect(session.getState().thinkingLevel).toBe("high");
+  });
+
+  it("doesn't let a view run Office calls", async () => {
+    const { remote } = await servedApp();
+
+    await expect(remote.host.runCode("return 1")).rejects.toThrow();
   });
 });

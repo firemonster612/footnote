@@ -1,6 +1,12 @@
 import { createFauxCore, type Api, type Model } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
-import type { FootnoteTool, HostModule, KeyValueStore, OfficeHost } from "../../src/contracts.ts";
+import type {
+  FootnoteTool,
+  HostModule,
+  KeyValueStore,
+  OfficeHost,
+  SkillDefinition,
+} from "../../src/contracts.ts";
 import type { ProviderClient } from "../../src/providers/providerClient.ts";
 import { defaultSettings, type SettingsHandle } from "../../src/settings/settings.ts";
 import { createChatStore, type ChatRecord } from "../../src/storage/chatStore.ts";
@@ -108,7 +114,13 @@ export function newChatRecord(overrides: Partial<ChatRecord> = {}): ChatRecord {
 }
 
 export function sessionHarness(
-  options: { readResultChars?: number; contextWindow?: number; maxTokens?: number } = {},
+  options: {
+    readResultChars?: number;
+    contextWindow?: number;
+    maxTokens?: number;
+    officeHost?: OfficeHost;
+    skills?: () => SkillDefinition[];
+  } = {},
 ) {
   const host = fakeHostModule(options);
   const provider = fauxProvider(options);
@@ -116,12 +128,12 @@ export function sessionHarness(
   const open = (record: ChatRecord) =>
     createChatSession({
       record,
-      host: fakeHost,
+      host: options.officeHost ?? fakeHost,
       hostModule: host.hostModule,
       settings: fakeSettings(),
       provider: provider.client,
       chatStore,
-      skills: () => [],
+      skills: options.skills ?? (() => []),
     });
   return { ...host, ...provider, chatStore, open };
 }

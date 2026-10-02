@@ -54,8 +54,11 @@ let countingSyncs = false;
 /** Counts every RequestContext.sync in this realm, for the opt-in timing log (see logOpTiming). */
 function countSyncs(): void {
   if (countingSyncs) return;
+  // Timing is optional: a realm without the class (an old or stubbed Office.js) must still run ops.
+  const prototype = (globalThis as { PowerPoint?: typeof PowerPoint }).PowerPoint?.RequestContext
+    ?.prototype;
+  if (!prototype) return;
   countingSyncs = true;
-  const prototype = PowerPoint.RequestContext.prototype;
   const sync = prototype.sync;
   prototype.sync = function <T>(this: PowerPoint.RequestContext, passThroughValue?: T) {
     syncCount += 1;

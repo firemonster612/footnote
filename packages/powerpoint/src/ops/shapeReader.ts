@@ -3,11 +3,12 @@ import type { FontInfo, ShapeInfo } from "./types.ts";
 
 type ShapeList = PowerPoint.ShapeCollection | PowerPoint.ShapeScopedCollection;
 
-// Shape types that carry a text frame and a fill when getTextFrameOrNullObject (1.10) isn't available.
+// Shape types that carry a text frame and a fill when getTextFrameOrNullObject (1.10) isn't available. A placeholder
+// can hold a picture, chart or table instead of text, so check its frame's hasText before loading its text.
 export const TEXT_TYPES = new Set(["GeometricShape", "TextBox", "Placeholder", "Callout"]);
 const LINE_TYPES = new Set([...TEXT_TYPES, "Line", "Image"]);
 /** Types that always have a text frame, so their text can load before the frame is checked. */
-const CERTAIN_TEXT_TYPES = new Set(["GeometricShape", "TextBox"]);
+export const CERTAIN_TEXT_TYPES = new Set(["GeometricShape", "TextBox"]);
 const MAX_GROUP_DEPTH = 2;
 const MAX_PARAGRAPHS = 30;
 const FONT_FIELDS = "name,size,color,bold,italic,underline";

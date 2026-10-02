@@ -6,8 +6,8 @@ import {
   type TranscriptContext,
 } from "@earendil-works/pi-ai";
 import { describe, expect, it } from "vitest";
-import type { ChatSession, ToolAccess } from "../../src/contracts.ts";
-import { newChatRecord, sessionHarness } from "./fakes.ts";
+import type { ChatSession, SkillDefinition, ToolAccess, ToolEnv } from "../../src/contracts.ts";
+import { fakeHost, newChatRecord, sessionHarness } from "./fakes.ts";
 
 function lastText(message: Message | undefined): string {
   if (!message || message.role === "system" || message.role === "assistant") return "";
@@ -330,5 +330,221 @@ describe("revert", () => {
     const replacement = session.getState().messages.findLast((message) => message.role === "user")!;
     await session.revertTo(replacement.timestamp);
     expect(harness.undoneTurnIds.at(-1)).toEqual([harness.turns.at(-1)]);
+  });
+});
+
+const userTexts = (session: ChatSession) =>
+  session
+    .getState()
+    .messages.flatMap((message) => (message.role === "user" ? [lastText(message)] : []));
+
+/** A promise the test settles later. */
+function gate<T = void>() {
+  let open!: (value: T) => void;
+  const opened = new Promise<T>((resolve) => (open = resolve));
+  return { open, opened };
+}
+
+describe("operations that overlap", () => {
+  it("queues a message sent while a revert restores the document, then sends it", async () => {
+    const harness = sessionHarness();
+    harness.faux.setResponses([
+      fauxAssistantMessage("One."),
+      fauxAssistantMessage("Two."),
+      fauxAssistantMessage("Meanwhile done."),
+    ]);
+    const session = harness.open(newChatRecord());
+    await session.send("First");
+    await session.send("Second");
+    const undo = gate();
+    harness.hostModule.undo.undoTurns = async (_env, _chatId, turnIds) => {
+      await undo.opened;
+      return { restored: turnIds.length, removed: 0, warnings: [] };
+    };
+
+    const reverting = session.revertTo(session.getState().revertibleRequests[1]!);
+    void session.send("Meanwhile");
+    expect(session.getState().queuedMessages.map((message) => message.text)).toEqual(["Meanwhile"]);
+    undo.open();
+    await reverting;
+    await untilIdle(session);
+
+    expect(userTexts(session)).toEqual(["First", "Meanwhile"]);
+  });
+
+  it("puts a request stopped before its run started back at the front of the queue", async () => {
+    const harness = sessionHarness();
+    const model = gate<Awaited<ReturnType<typeof harness.client.resolveModel>>>();
+    const resolveModel = harness.client.resolveModel;
+    harness.client.resolveModel = () => model.opened;
+    const session = harness.open(newChatRecord());
+
+    const sending = session.send("Tidy slide 2");
+    session.queue("Later");
+    session.abort();
+    model.open(await resolveModel("faux-model"));
+    await sending;
+    await new Promise((resolve) => setTimeout(resolve, 20));
+
+    const state = session.getState();
+    expect(state.isStreaming).toBe(false);
+    expect(state.queuedMessages.map((message) => message.text)).toEqual(["Tidy slide 2", "Later"]);
+    expect(state.messages).toEqual([]);
+    expect(state.revertibleRequests).toEqual([]);
+    expect(harness.faux.state.callCount).toBe(0);
+  });
+
+  it("moves a steer the model never received back to the queue when the user stops", async () => {
+    const harness = sessionHarness();
+    const requests: TranscriptContext[] = [];
+    let session!: ChatSession;
+    harness.faux.setResponses([
+      () => {
+        session.steer("Use teal");
+        session.abort();
+        return fauxAssistantMessage([], {
+          stopReason: "aborted",
+          errorMessage: "Request was aborted",
+        });
+      },
+      (context) => {
+        requests.push(context);
+        return fauxAssistantMessage("Done.");
+      },
+    ]);
+    session = harness.open(newChatRecord());
+
+    await session.send("Recolor the deck");
+    expect(session.getState().queuedMessages.map((message) => message.text)).toEqual(["Use teal"]);
+    session.removeQueued(session.getState().queuedMessages[0]!.id);
+    await session.send("Never mind");
+
+    expect(JSON.stringify(requests[0]!.messages)).not.toContain("Use teal");
+  });
+
+  it("stops saving once disposed, so a deleted chat stays deleted", async () => {
+    const harness = sessionHarness();
+    const reply = gate();
+    harness.faux.setResponses([
+      async () => {
+        await reply.opened;
+        return fauxAssistantMessage("Done.");
+      },
+    ]);
+    const session = harness.open(newChatRecord());
+
+    const sending = session.send("Add a slide");
+    await new Promise((resolve) => setTimeout(resolve, 0));
+    session.dispose();
+    await harness.chatStore.delete("chat-1");
+    reply.open();
+    await sending;
+    await new Promise((resolve) => setTimeout(resolve, 0));
+
+    expect(await harness.chatStore.get("chat-1")).toBeUndefined();
+  });
+});
+
+describe("saving", () => {
+  it("saves the chat as soon as a run starts, so a reopened panel lists it", async () => {
+    const harness = sessionHarness();
+    let listed: unknown[] = [];
+    harness.faux.setResponses([
+      async () => {
+        await new Promise((resolve) => setTimeout(resolve, 0));
+        listed = await harness.chatStore.list("doc-1");
+        return fauxAssistantMessage("Done.");
+      },
+    ]);
+    const session = harness.open(newChatRecord());
+
+    await session.send("Add a slide");
+
+    expect(listed).toEqual([expect.objectContaining({ id: "chat-1", title: "Add a slide" })]);
+  });
+
+  it("stores the emptied chat when the first request is reverted", async () => {
+    const harness = sessionHarness();
+    harness.faux.setResponses([fauxAssistantMessage("Done.")]);
+    const session = harness.open(newChatRecord());
+    await session.send("First");
+
+    await session.revertTo(session.getState().revertibleRequests[0]!);
+
+    expect((await harness.chatStore.get("chat-1"))?.messages).toEqual([]);
+  });
+});
+
+describe("tools", () => {
+  it("blocks document tools when the chat's tab now shows another document", async () => {
+    const harness = sessionHarness({
+      officeHost: {
+        ...fakeHost,
+        status: async () => ({ connected: true, host: "powerpoint", documentId: "doc-2" }),
+      },
+    });
+    harness.faux.setResponses([
+      fauxAssistantMessage(fauxToolCall("add_slide", {})),
+      fauxAssistantMessage("Stopped."),
+    ]);
+    const session = harness.open(newChatRecord({ writesAllowed: true }));
+
+    await session.send("Add a slide");
+
+    const result = session.getState().messages.find((message) => message.role === "toolResult");
+    expect(result).toMatchObject({ isError: true });
+    expect(JSON.stringify(result)).toContain("different document");
+  });
+
+  it("gives host tools an env bound to the chat", () => {
+    const harness = sessionHarness();
+    const createTools = harness.hostModule.createTools;
+    let env: ToolEnv | undefined;
+    harness.hostModule.createTools = (toolEnv) => {
+      env = toolEnv;
+      return createTools(toolEnv);
+    };
+
+    harness.open(newChatRecord());
+
+    expect(env?.chatId).toBe("chat-1");
+  });
+
+  it("labels tool calls with the tool's label when it can't describe the call", async () => {
+    const harness = sessionHarness();
+    harness.faux.setResponses([
+      fauxAssistantMessage(fauxToolCall("get_deck", {}, { id: "call-1" })),
+      fauxAssistantMessage("Read it."),
+    ]);
+    const session = harness.open(newChatRecord());
+
+    await session.send("Read the deck");
+
+    expect(session.getState().toolCallLabels).toEqual({ "call-1": "get_deck" });
+  });
+
+  it("lists skills added after the chat opened", async () => {
+    const skills: SkillDefinition[] = [];
+    const harness = sessionHarness({ skills: () => skills });
+    const requests: TranscriptContext[] = [];
+    harness.faux.setResponses(
+      Array.from({ length: 2 }, () => (context: TranscriptContext) => {
+        requests.push(context);
+        return fauxAssistantMessage("Done.");
+      }),
+    );
+    const session = harness.open(newChatRecord());
+    await session.send("First");
+
+    skills.push({
+      name: "pitch-deck",
+      description: "Build pitch decks.",
+      body: "",
+      source: "custom",
+    });
+    await session.send("Second");
+
+    expect(systemText(requests[0])).not.toContain("pitch-deck");
+    expect(systemText(requests[1])).toContain("pitch-deck");
   });
 });

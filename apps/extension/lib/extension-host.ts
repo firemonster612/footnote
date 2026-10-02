@@ -11,6 +11,7 @@ import type {
 import {
   hostNames,
   logOpTiming,
+  OutcomeUnknownError,
   statusFromInfo,
   unknownOutcome,
   unwrapOpResponse,
@@ -45,10 +46,15 @@ interface BridgeFrame {
   frameId: number;
 }
 
+interface PendingRequest {
+  resolve(response: OpResponse): void;
+  reject(error: Error): void;
+}
+
 interface Connection {
   frameId: number;
   port: chrome.runtime.Port;
-  pending: Map<string, (response: OpResponse) => void>;
+  pending: Map<string, PendingRequest>;
 }
 
 export function createExtensionHost(kind: OfficeHostKind, tabId: number): OfficeHost {
@@ -102,7 +108,7 @@ export function createExtensionHost(kind: OfficeHostKind, tabId: number): Office
     let answered = false;
     port.onMessage.addListener((response: BridgeResponse) => {
       answered = true;
-      opened.pending.get(response.id)?.(response);
+      opened.pending.get(response.id)?.resolve(response);
     });
     port.onDisconnect.addListener(() => {
       close(opened);
@@ -116,14 +122,12 @@ export function createExtensionHost(kind: OfficeHostKind, tabId: number): Office
   function close(closing: Connection): void {
     if (connection === closing) connection = undefined;
     closing.port.disconnect();
-    for (const settle of closing.pending.values()) {
-      settle({
-        ok: false,
-        error: {
-          message:
-            "Lost the connection to the add-in frame. Reload the PowerPoint tab if it doesn't reconnect.",
-        },
-      });
+    for (const request of closing.pending.values()) {
+      request.reject(
+        new OutcomeUnknownError(
+          "Lost the connection to the add-in frame before it answered. Reload the PowerPoint tab if it doesn't reconnect.",
+        ),
+      );
     }
   }
 
@@ -134,7 +138,9 @@ export function createExtensionHost(kind: OfficeHostKind, tabId: number): Office
     options?: OfficeCallOptions,
   ): Promise<T> {
     const id = crypto.randomUUID();
-    const response = new Promise<OpResponse>((resolve) => target.pending.set(id, resolve));
+    const response = new Promise<OpResponse>((resolve, reject) =>
+      target.pending.set(id, { resolve, reject }),
+    );
     const startedAt = performance.now();
     try {
       target.port.postMessage({ id, op, args } satisfies BridgeRequest);
@@ -173,14 +179,18 @@ export function createExtensionHost(kind: OfficeHostKind, tabId: number): Office
     }
   }
 
-  /** The add-in frame drops its port for a moment when the pane reloads; wait for it instead of failing the tool call. */
-  async function activeConnection(): Promise<Connection> {
+  /**
+   * The add-in frame drops its port for a moment when the pane reloads; wait for it instead of failing the tool call.
+   * Rejects with the signal's reason as soon as it aborts.
+   */
+  async function activeConnection(signal?: AbortSignal): Promise<Connection> {
+    signal?.throwIfAborted();
     const deadline = Date.now() + RECONNECT_WAIT_MS;
     while (!connection || !status.connected) {
       if (Date.now() >= deadline) throw new Error(status.reason ?? notFoundReason);
-      await refresh();
+      await untilAborted(refresh(), signal);
       if (connection && status.connected) break;
-      await new Promise((resolve) => setTimeout(resolve, RECONNECT_POLL_MS));
+      await untilAborted(new Promise((resolve) => setTimeout(resolve, RECONNECT_POLL_MS)), signal);
     }
     return connection;
   }
@@ -205,13 +215,16 @@ export function createExtensionHost(kind: OfficeHostKind, tabId: number): Office
       return () => listeners.delete(listener);
     },
     async call(op, args, options) {
-      return request(await activeConnection(), op, args, options);
+      return request(await activeConnection(options?.signal), op, args, options);
     },
     async runCode(code, options): Promise<CodeRunResult> {
+      const signal = options?.signal;
+      // Until the script is dispatched, a cancelled or failed run has a known outcome: nothing ran.
       let target: Connection;
       try {
-        target = await activeConnection();
-        if (!(await askWorker("userScriptsAvailable"))) return codeFailure(USER_SCRIPTS_OFF);
+        target = await activeConnection(signal);
+        if (!(await untilAborted(askWorker("userScriptsAvailable"), signal)))
+          return codeFailure(USER_SCRIPTS_OFF);
       } catch (error) {
         return codeFailure(errorMessage(error));
       }
@@ -236,6 +249,17 @@ export function createExtensionHost(kind: OfficeHostKind, tabId: number): Office
       }
     },
   };
+}
+
+/** Settles like `work`, or rejects with the signal's reason as soon as it aborts. */
+function untilAborted<T>(work: Promise<T>, signal: AbortSignal | undefined): Promise<T> {
+  if (!signal) return work;
+  return new Promise<T>((resolve, reject) => {
+    const onAbort = () => reject(signal.reason);
+    if (signal.aborted) return onAbort();
+    signal.addEventListener("abort", onAbort, { once: true });
+    work.finally(() => signal.removeEventListener("abort", onAbort)).then(resolve, reject);
+  });
 }
 
 function codeFailure(message: string): CodeRunResult {

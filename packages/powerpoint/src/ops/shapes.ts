@@ -139,20 +139,52 @@ function flattenShapes(shapes: ShapeInfo[]): ShapeInfo[] {
 type ReadBack = ShapeInfo[] | { error: unknown };
 
 /**
- * Finishes the read-back the write's own sync carried. When that sync failed, the queued loads went with it,
- * so the slides are read again.
+ * Finishes the read-back the write's own sync carried, one result per slide. When that sync failed, the queued loads
+ * went with it and the context is unusable, so the slides are read again in a new run.
  */
 export async function readBack(
-  context: PowerPoint.RequestContext,
-  lists: ShapeList[],
+  slideIds: string[],
   pending: PendingShapeLists | undefined,
 ): Promise<ReadBack[]> {
   try {
-    const shapes = await (pending ? pending.read() : readShapeLists(context, lists, "styles"));
-    return lists.map((_, i) => shapes[i] ?? []);
+    const shapes = await (pending?.read() ??
+      PowerPoint.run((context) =>
+        readShapeLists(
+          context,
+          slideIds.map((id) => context.presentation.slides.getItem(id).shapes),
+          "styles",
+        ),
+      ));
+    return slideIds.map((_, i) => shapes[i] ?? []);
   } catch (error) {
-    return lists.map(() => ({ error }));
+    return slideIds.map(() => ({ error }));
   }
+}
+
+/**
+ * A batch that creates a shape and then edits it failed. Finds the shape it created on `slideId` (in a new run, since
+ * the failed context is unusable) and returns its ID, or the warning to give when the slide can't be read.
+ * Rethrows `error` when nothing was created: then the write simply failed.
+ */
+export async function findCreatedShape(
+  slideId: string,
+  before: Set<string>,
+  error: unknown,
+): Promise<{ id: string } | { warning: string }> {
+  let created: string | undefined;
+  try {
+    created = await PowerPoint.run(async (context) => {
+      const shapes = context.presentation.slides.getItem(slideId).shapes.load("items/id");
+      await context.sync();
+      return shapes.items.find((item) => !before.has(item.id))?.id;
+    });
+  } catch (readError) {
+    return {
+      warning: `PowerPoint reported an error during this write (${describeError(error)}) and the slide couldn't be read afterwards (${describeError(readError)}), so the new shape may have been created. Call get_slide before adding it again.`,
+    };
+  }
+  if (!created) throw error;
+  return { id: created };
 }
 
 /** Receipt for shape-level writes on one slide: the changed shapes as they read back. */
@@ -298,23 +330,25 @@ export const shapeOps = {
       let pending: PendingShapeLists | undefined = queueShapeLists(context, [shapes], "styles", [
         textShapeIds(checked, slideId),
       ]);
-      const warnings: string[] = [];
-      let shapeId: string;
+      const warnings = [...checked.warnings];
+      const changed: string[] = [];
       try {
         await context.sync();
-        shapeId = shape.id;
+        changed.push(shape.id);
       } catch (error) {
         // Creation and styling share one batch; a styling failure leaves the new shape in place.
-        const after = shapes.load("items/id");
-        await context.sync();
-        const created = after.items.find((item) => !before.has(item.id));
-        if (!created) throw error;
-        shapeId = created.id;
-        warnings.push(`Shape ${shapeId} was created but styling failed: ${describeError(error)}`);
         pending = undefined;
+        const found = await findCreatedShape(slideId, before, error);
+        if ("warning" in found) warnings.push(found.warning);
+        else {
+          changed.push(found.id);
+          warnings.push(
+            `Shape ${found.id} was created but styling failed: ${describeError(error)}`,
+          );
+        }
       }
-      const [read = []] = await readBack(context, [shapes], pending);
-      return withSnapshots(shapeReceipt(slideId, read, [shapeId], warnings), checked);
+      const [read = []] = await readBack([slideId], pending);
+      return withSnapshots(shapeReceipt(slideId, read, changed, warnings), checked);
     }),
 
   /** Applies every update on every listed slide in one batch, so the edits appear together. */
@@ -335,7 +369,7 @@ export const shapeOps = {
       const checked = await guard.check();
       const linkTexts = await loadLinkTexts(context, checked, targets);
 
-      const warnings: string[] = [];
+      const warnings = [...checked.warnings];
       const perSlide = new Map(
         edits.map(({ slideId }) => [
           slideId,
@@ -391,7 +425,10 @@ export const shapeOps = {
         warnings.push(batchFailureWarning(error));
         pending = undefined;
       }
-      const reads = await readBack(context, lists, pending);
+      const reads = await readBack(
+        edits.map((edit) => edit.slideId),
+        pending,
+      );
       const receipts = edits.map(({ slideId }, i) => ({
         slideId,
         receipt: shapeReceipt(slideId, reads[i]!, slideOf(i).changed, [], slideOf(i).deleted),
@@ -416,8 +453,8 @@ export const shapeOps = {
         textShapeIds(checked, slideId),
       ]);
       await context.sync();
-      const [read = []] = await readBack(context, [shapes], pending);
-      return withSnapshots(shapeReceipt(slideId, read, [group.id], []), checked);
+      const [read = []] = await readBack([slideId], pending);
+      return withSnapshots(shapeReceipt(slideId, read, [group.id], [...checked.warnings]), checked);
     }),
 
   ungroup_shape: ({
@@ -440,7 +477,7 @@ export const shapeOps = {
         textShapeIds(checked, slideId),
       ]);
       await context.sync();
-      const [read = []] = await readBack(context, [shapes], pending);
-      return withSnapshots(shapeReceipt(slideId, read, childIds, []), checked);
+      const [read = []] = await readBack([slideId], pending);
+      return withSnapshots(shapeReceipt(slideId, read, childIds, [...checked.warnings]), checked);
     }),
 };

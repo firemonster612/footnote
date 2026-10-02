@@ -19,7 +19,12 @@ import { MessageActions } from "./MessageActions.tsx";
 import { Markdown } from "../markdown/Markdown.tsx";
 import { ApprovalCard } from "./ApprovalCard.tsx";
 import { ToolCard } from "./ToolCard.tsx";
-import { indexToolResults, splitUserContent, toolCallStatus } from "./transcript.ts";
+import {
+  indexToolResults,
+  liveAssistantMessage,
+  splitUserContent,
+  toolCallStatus,
+} from "./transcript.ts";
 
 export type ToolIndex = ReadonlyMap<string, FootnoteTool>;
 
@@ -31,13 +36,22 @@ export function MessageList({
   session,
   tools,
   onRevert,
+  undoing,
 }: {
   state: ChatSessionState;
   session: ChatSession;
   tools: ToolIndex;
   onRevert: (messageTimestamp: number) => void;
+  /** An undo or revert is in flight. */
+  undoing: boolean;
 }) {
   const results = useMemo(() => indexToolResults(state.messages), [state.messages]);
+  const liveMessage = liveAssistantMessage(state);
+  const revertBlockedReason = state.isStreaming
+    ? "Stop the response to revert"
+    : undoing
+      ? "Undoing…"
+      : undefined;
   const scrollRef = useRef<HTMLDivElement>(null);
   const pinnedRef = useRef(true);
 
@@ -56,7 +70,7 @@ export function MessageList({
             {...(state.revertibleRequests.includes(message.timestamp) && {
               onRevert: () => onRevert(message.timestamp),
             })}
-            {...(state.isStreaming && { revertBlockedReason: "Stop the response to revert" })}
+            {...(revertBlockedReason && { revertBlockedReason })}
           />
         );
       case "assistant":
@@ -65,6 +79,7 @@ export function MessageList({
             key={key}
             message={message}
             streaming={streaming}
+            live={message === liveMessage}
             state={state}
             results={results}
             tools={tools}
@@ -77,9 +92,6 @@ export function MessageList({
         return null;
     }
   };
-
-  // Stays up for the whole run, including while text streams, so the only sign of work isn't the Stop button.
-  const working = state.isStreaming && state.pendingApprovals.length === 0;
 
   return (
     <div
@@ -94,7 +106,8 @@ export function MessageList({
       <div role="log" aria-live="polite" className="flex flex-col gap-3 p-3">
         {state.messages.map((message, index) => renderMessage(message, index))}
         {state.streamingMessage && renderMessage(state.streamingMessage, "streaming", true)}
-        {working && <WorkingIndicator />}
+        {/* Up for the whole run, approvals included, so the only sign of work isn't the Stop button. */}
+        {state.isStreaming && <WorkingIndicator />}
         {state.pendingApprovals.map((request) => (
           <ApprovalCard
             key={request.id}
@@ -160,12 +173,15 @@ function UserMessageView({
 function AssistantMessageView({
   message,
   streaming,
+  live,
   state,
   results,
   tools,
 }: {
   message: AssistantMessage;
   streaming: boolean;
+  /** The newest message of the running run: only its unfinished calls can be running or queued. */
+  live: boolean;
   state: ChatSessionState;
   results: Map<string, ToolResultMessage>;
   tools: ToolIndex;
@@ -206,7 +222,7 @@ function AssistantMessageView({
                   part.id,
                   result,
                   state.pendingApprovals,
-                  state.isStreaming,
+                  live,
                   firstUnfinishedCallId,
                 )}
               />

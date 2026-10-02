@@ -1,17 +1,9 @@
 import { Check, Copy } from "lucide-react";
-import { useState } from "react";
+import { useCopy } from "../lib/clipboard.ts";
 import { IconButton } from "./icon-button.tsx";
 
-const copiedResetMs = 1500;
-
 export function CodeBlock({ code }: { code: string }) {
-  const [copied, setCopied] = useState(false);
-
-  async function copy() {
-    await navigator.clipboard.writeText(code);
-    setCopied(true);
-    setTimeout(() => setCopied(false), copiedResetMs);
-  }
+  const { copied, copy } = useCopy();
 
   return (
     <div className="group relative">
@@ -21,7 +13,7 @@ export function CodeBlock({ code }: { code: string }) {
       <IconButton
         icon={copied ? Check : Copy}
         label={copied ? "Copied" : "Copy code"}
-        onClick={copy}
+        onClick={() => copy(code)}
         className="absolute top-1 right-1 size-6 bg-muted opacity-0 group-hover:opacity-100 focus-visible:opacity-100 [&_svg]:size-3.5"
       />
     </div>

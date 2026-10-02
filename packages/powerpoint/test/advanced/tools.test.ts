@@ -16,10 +16,19 @@ async function makePptx(slideCount: number): Promise<string> {
 /** In-memory deck: slide ID → single-slide PPTX. Records every op call. */
 function fakeHost(slides: Map<string, string>) {
   const calls: { op: string; args: any }[] = [];
+  const failing = new Set<string>();
   let nextId = 900;
   const call = async (op: string, args: any): Promise<unknown> => {
     calls.push({ op, args });
+    if (failing.has(op)) throw new Error(`${op} failed: connection hiccup`);
     switch (op) {
+      case "get_slide_states":
+        return Object.fromEntries(
+          args.slideIds.map((id: string) => [
+            id,
+            { index: 0, fingerprint: `fp-${id}`, base64: slides.get(id) },
+          ]),
+        );
       case "get_deck":
         return {
           slideWidth: 960,
@@ -32,7 +41,7 @@ function fakeHost(slides: Map<string, string>) {
         const id = `${nextId++}#`;
         slides.delete(args.slideId);
         slides.set(id, args.base64);
-        return { slideId: id, shapes: [] };
+        return { slideId: id, shapes: [], warnings: [] };
       }
       case "insert_slides":
         return {
@@ -46,16 +55,18 @@ function fakeHost(slides: Map<string, string>) {
         throw new Error(`unexpected op ${op}`);
     }
   };
-  return { host: { call } as unknown as OfficeHost, calls };
+  return { host: { call } as unknown as OfficeHost, calls, failing };
 }
 
 function setup(slides: Map<string, string>, attachments: ProcessedAttachment[] = []) {
-  const { host, calls } = fakeHost(slides);
+  const { host, calls, failing } = fakeHost(slides);
   const hooks: string[] = [];
   const deps: AdvancedToolDeps = {
     beforeWrite: async (ids) => void hooks.push(`before ${ids.join(",")}`),
-    afterWrite: async ({ createdSlideIds = [] }) =>
-      void hooks.push(`after ${createdSlideIds.join(",")}`),
+    afterWrite: async ({ createdSlideIds = [] }) => {
+      hooks.push(`after ${createdSlideIds.join(",")}`);
+      return [];
+    },
   };
   const env: ToolEnv = {
     host,
@@ -67,7 +78,7 @@ function setup(slides: Map<string, string>, attachments: ProcessedAttachment[] =
   const tools = Object.fromEntries(
     createAdvancedTools(env, deps, () => undefined).map((t) => [t.name, t]),
   );
-  return { tools, calls, hooks };
+  return { tools, calls, hooks, failing };
 }
 
 const resultJson = (result: { content: { type: string; text?: string }[] }) =>
@@ -76,7 +87,7 @@ const resultJson = (result: { content: { type: string; text?: string }[] }) =>
 describe("advanced tools", () => {
   it("set_notes checkpoints, replaces the slide, and reports the new ID with read-back", async () => {
     const slides = new Map([["256#1", await makePptx(1)]]);
-    const { tools, hooks } = setup(slides);
+    const { tools, hooks, calls } = setup(slides);
 
     const result = await tools.set_notes!.execute("call", {
       notes: [{ slideId: "256#1", text: "Line one\nLine two" }],
@@ -84,9 +95,29 @@ describe("advanced tools", () => {
 
     const receipt = resultJson(result);
     expect(receipt.replacedSlideIds).toEqual({ "256#1": "900#" });
+    // The slide may not change between its export and the replace.
+    expect(calls.find((c) => c.op === "replace_slide")!.args.expectedFingerprints).toEqual({
+      "256#1": "fp-256#1",
+    });
     expect(receipt.verified.notesMatch).toEqual({ "900#": true });
     expect(hooks).toEqual(["before 256#1", "after 900#"]);
     expect(await readNotes(slides.get("900#")!)).toBe("Line one\nLine two");
+  });
+
+  it("set_notes reports a failed verification as a warning, not a failed write", async () => {
+    const slides = new Map([["256#1", await makePptx(1)]]);
+    const { tools, failing } = setup(slides);
+    failing.add("export_slide");
+
+    const result = await tools.set_notes!.execute("call", {
+      notes: [{ slideId: "256#1", text: "Notes" }],
+    });
+
+    const receipt = resultJson(result);
+    expect(result.isError).toBeFalsy();
+    expect(receipt.changed).toEqual(["900#"]);
+    expect(receipt.failed).toBeUndefined();
+    expect(receipt.warnings.join(" ")).toContain("connection hiccup");
   });
 
   it("insert_slides_from_file inserts the chosen slides after the slide at position - 1", async () => {

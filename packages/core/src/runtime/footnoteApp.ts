@@ -10,7 +10,7 @@ import { createProviderClient } from "../providers/providerClient.ts";
 import { loadSettings } from "../settings/settings.ts";
 import { createChatStore, type ChatRecord } from "../storage/chatStore.ts";
 import { openIndexedDbStore } from "../storage/keyValueStores.ts";
-import { createChatSession } from "./chatSession.ts";
+import { createChatSession, type LiveChatSession } from "./chatSession.ts";
 
 export interface FootnoteEngineOptions {
   hostModule: HostModule;
@@ -32,7 +32,7 @@ export interface FootnoteEngine {
 }
 
 interface OpenChat {
-  session: ChatSession;
+  session: LiveChatSession;
   binding: { host: OfficeHost };
 }
 
@@ -69,6 +69,13 @@ export async function createFootnoteEngine({
     return session;
   }
 
+  /** The chat's live session, moved to `host` unless it's running. */
+  function openSession(chatId: string, host: OfficeHost): ChatSession | undefined {
+    const open = openChats.get(chatId);
+    if (open && !open.session.getState().isStreaming) open.binding.host = host;
+    return open?.session;
+  }
+
   return {
     appFor: (host) => ({
       host,
@@ -95,17 +102,16 @@ export async function createFootnoteEngine({
           );
         },
         async open(chatId) {
-          const open = openChats.get(chatId);
-          if (open) {
-            if (!open.session.getState().isStreaming) open.binding.host = host;
-            return open.session;
-          }
+          const open = openSession(chatId, host);
+          if (open) return open;
           const record = await chatStore.get(chatId);
           if (!record) throw new Error("This chat no longer exists.");
-          return startSession(record, host);
+          // Another open of this chat may have finished while this one read storage.
+          return openSession(chatId, host) ?? startSession(record, host);
         },
         async delete(chatId) {
-          openChats.get(chatId)?.session.abort();
+          // Disposed first: a running chat would otherwise save itself again after the delete.
+          openChats.get(chatId)?.session.dispose();
           openChats.delete(chatId);
           await chatStore.delete(chatId);
         },

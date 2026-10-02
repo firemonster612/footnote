@@ -6,14 +6,23 @@ export function jsonResult<T>(value: T): AgentToolResult<T> {
   return { content: [{ type: "text", text: JSON.stringify(value) }], details: value };
 }
 
-/** What the model sees of a write: changed IDs, read-back values and warnings. Fingerprints stay internal. */
+/** Plain text for the model, with nothing for the UI. */
+export function textResult(text: string): AgentToolResult<undefined> {
+  return { content: [{ type: "text", text }], details: undefined };
+}
+
+/**
+ * What the model sees of a write: changed IDs, read-back values and warnings. Fingerprints stay internal; undo
+ * snapshots stay out of `details` too, since they're whole slides.
+ */
 export function receiptResult(
   receipt: WriteReceipt,
   extra: Record<string, unknown> = {},
 ): AgentToolResult<WriteReceipt> {
+  const { snapshots: _, ...details } = receipt;
   const { changed, verified, warnings } = receipt;
   const value = { changed, verified, ...(warnings.length > 0 && { warnings }), ...extra };
-  return { content: [{ type: "text", text: JSON.stringify(value) }], details: receipt };
+  return { content: [{ type: "text", text: JSON.stringify(value) }], details };
 }
 
 export const plural = (count: number, noun: string): string =>

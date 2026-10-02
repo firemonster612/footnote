@@ -21,8 +21,10 @@ export function SkillsSection({ app, settings }: { app: FootnoteApp; settings: S
     setError(undefined);
     try {
       const skill: SkillDefinition = { ...(await load()), source: "custom" };
+      // Read the list now: skills may have been removed while the import was fetching.
+      const current = app.settings.get().customSkills;
       await app.settings.update({
-        customSkills: [...skills.filter((existing) => existing.name !== skill.name), skill],
+        customSkills: [...current.filter((existing) => existing.name !== skill.name), skill],
       });
       clearInput();
     } catch (cause) {

@@ -1,10 +1,26 @@
 // Agent-side tools for what Office.js can't do directly: charts, speaker notes, slide import.
 // All three edit PPTX packages (export → JSZip → re-insert), so slides they touch come back with new IDs.
 
+import type { AgentToolResult } from "@earendil-works/pi-agent-core";
 import type { FootnoteTool, ToolEnv } from "@footnote/core/contracts";
-import { Type, type TSchema } from "typebox";
-import type { DeckInfo, WriteReceipt } from "../ops/types.ts";
-import { type SlidePositions, slideLabel, slidesLabel } from "../tools/schemas.ts";
+import { Type } from "typebox";
+import { slideNotFound } from "../ops/presentation.ts";
+import type { DeckInfo, InsertFormatting, SlideState, WriteReceipt } from "../ops/types.ts";
+import { jsonResult, textResult } from "../tools/results.ts";
+import {
+  defineTool,
+  Position,
+  SlideId,
+  type SlidePositions,
+  slideLabel,
+  slidesLabel,
+} from "../tools/schemas.ts";
+import {
+  errorMessage,
+  isOutcomeUnknown,
+  outcomeUnknownMessage,
+  WRITE_TIMEOUT_MS,
+} from "../writeGuard.ts";
 import {
   buildChartPptx,
   chartKinds,
@@ -23,32 +39,9 @@ import { keepSlides } from "./slide-import.ts";
 /** Used when the host can't report slide size (no PowerPointApi 1.10) and the deck has no slide to export. */
 const DEFAULT_SLIDE_SIZE: SlideSize = { width: 960, height: 540 };
 
-function defineTool<T extends TSchema>(tool: FootnoteTool<T>): FootnoteTool {
-  // execute's params are contravariant, so a specific tool isn't assignable to FootnoteTool<TSchema>.
-  // Sound because the agent validates arguments against `parameters` before calling execute.
-  return tool as FootnoteTool;
-}
-
-function jsonResult(value: unknown) {
-  return { content: [{ type: "text" as const, text: JSON.stringify(value) }], details: value };
-}
-
-const position = Type.Optional(
-  Type.Integer({
-    minimum: 1,
-    description:
-      "1-based slide number the first inserted slide should get. Omit to append at the end.",
-  }),
-);
-
 const chartParameters = Type.Object({
-  slideId: Type.Optional(
-    Type.String({
-      description:
-        "Existing slide to add the chart to. Omit to insert the chart on a new blank slide.",
-    }),
-  ),
-  position,
+  slideId: Type.Optional(SlideId),
+  position: Type.Optional(Position),
   type: Type.Enum(chartKinds),
   categories: Type.Array(Type.String(), {
     description:
@@ -100,13 +93,6 @@ export function createAdvancedTools(
 ): FootnoteTool[] {
   const { host } = env;
   const exportSlide = (slideId: string) => host.call<string>("export_slide", { slideId });
-  const replaceSlide = (args: ReplaceSlideArgs) =>
-    host.call<ReplaceSlideResult>("replace_slide", args);
-  const insertSlides = (args: {
-    base64: string;
-    targetSlideId?: string;
-    formatting: "KeepSourceFormatting" | "UseDestinationTheme";
-  }) => host.call<WriteReceipt>("insert_slides", args);
 
   /** Slide ID to insert after for a 1-based position (undefined = beginning); appends when position is omitted. */
   function insertAfter(deck: DeckInfo, position: number | undefined): string | undefined {
@@ -124,13 +110,70 @@ export function createAdvancedTools(
     return first ? readSlideSize(await loadPptx(await exportSlide(first.id))) : DEFAULT_SLIDE_SIZE;
   }
 
+  /**
+   * Exports a slide with its fingerprint (one read), edits the PPTX, and swaps the slide for the edited copy;
+   * replace_slide refuses when the slide changed since the export, so a user edit made meanwhile isn't lost. The copy
+   * joins the turn as a created slide. Returns the copy and the warnings of everything after the swap committed.
+   */
+  async function editSlidePackage(
+    slideId: string,
+    edit: (base64: string) => Promise<string>,
+  ): Promise<ReplaceSlideResult> {
+    const states = await host.call<Record<string, SlideState>>("get_slide_states", {
+      slideIds: [slideId],
+      exportSlideIds: [slideId],
+    });
+    const slide = states[slideId];
+    if (!slide) throw slideNotFound(slideId);
+    if (!slide.base64)
+      throw new Error(
+        "Editing slide contents this way needs PowerPointApi 1.8, which this PowerPoint doesn't support.",
+      );
+    const args: ReplaceSlideArgs = {
+      slideId,
+      base64: await edit(slide.base64),
+      expectedFingerprints: { [slideId]: slide.fingerprint },
+    };
+    const replaced = await host.call<ReplaceSlideResult>("replace_slide", args, {
+      timeoutMs: WRITE_TIMEOUT_MS,
+    });
+    const afterWarnings = await deps.afterWrite({ createdSlideIds: [replaced.slideId] });
+    return { ...replaced, warnings: [...replaced.warnings, ...afterWarnings] };
+  }
+
+  /** Inserts a PPTX's slides after `targetSlideId` (undefined = beginning) and records them as created. */
+  async function insertPackage(
+    base64: string,
+    formatting: InsertFormatting,
+    targetSlideId: string | undefined,
+  ): Promise<AgentToolResult<unknown>> {
+    let receipt: WriteReceipt;
+    try {
+      receipt = await host.call<WriteReceipt>(
+        "insert_slides",
+        { base64, formatting, ...(targetSlideId && { targetSlideId }) },
+        { timeoutMs: WRITE_TIMEOUT_MS },
+      );
+    } catch (error) {
+      if (isOutcomeUnknown(error)) return textResult(outcomeUnknownMessage(error));
+      throw error;
+    }
+    const createdSlideIds = receipt.createdSlideIds ?? [];
+    const afterWarnings = await deps.afterWrite({ createdSlideIds });
+    return jsonResult({
+      changed: createdSlideIds,
+      verified: receipt.verified,
+      warnings: [...receipt.warnings, ...afterWarnings],
+    });
+  }
+
   const getNotes = defineTool({
     name: "get_notes",
     label: "Read speaker notes",
     access: "read",
     description:
       "Read the speaker notes of one or more slides. Returns plain text per slide (paragraphs separated by newlines).",
-    parameters: Type.Object({ slideIds: Type.Array(Type.String(), { minItems: 1 }) }),
+    parameters: Type.Object({ slideIds: Type.Array(SlideId, { minItems: 1 }) }),
     describeCall: ({ slideIds }: { slideIds: string[] }) =>
       `Read the notes of ${slidesLabel(positions, slideIds)}`,
     async execute(_id, { slideIds }) {
@@ -150,7 +193,7 @@ export function createAdvancedTools(
       "Office.js has no notes API, so each slide is exported, edited and re-inserted at the same position: " +
       "its slide ID changes. Use the new IDs from the result for any later call.",
     parameters: Type.Object({
-      notes: Type.Array(Type.Object({ slideId: Type.String(), text: Type.String() }), {
+      notes: Type.Array(Type.Object({ slideId: SlideId, text: Type.String() }), {
         minItems: 1,
       }),
     }),
@@ -163,26 +206,36 @@ export function createAdvancedTools(
       await deps.beforeWrite(notes.map((n) => n.slideId));
       const replaced: Record<string, string> = {};
       const verified: Record<string, boolean> = {};
+      const warnings = [
+        "Slides were re-inserted to edit notes: old slide IDs are gone (see replacedSlideIds).",
+      ];
       const failed: { slideId: string; error: string }[] = [];
       for (const { slideId, text } of notes) {
+        let newId: string;
         try {
-          const edited = await writeNotes(await exportSlide(slideId), text);
-          const { slideId: newId } = await replaceSlide({ slideId, base64: edited });
-          replaced[slideId] = newId;
-          await deps.afterWrite({ createdSlideIds: [newId] });
+          const result = await editSlidePackage(slideId, (base64) => writeNotes(base64, text));
+          newId = result.slideId;
+          warnings.push(...result.warnings);
+        } catch (error) {
+          if (isOutcomeUnknown(error))
+            warnings.push(`Slide ${slideId}: ${outcomeUnknownMessage(error)}`);
+          else failed.push({ slideId, error: errorMessage(error) });
+          continue;
+        }
+        replaced[slideId] = newId;
+        // Verification reads the new slide; the write already happened, so a failed read is only a warning.
+        try {
           verified[newId] =
             (await readNotes(await exportSlide(newId))) === text.replace(/\r\n/g, "\n");
         } catch (error) {
-          failed.push({ slideId, error: error instanceof Error ? error.message : String(error) });
+          warnings.push(`Couldn't read back the notes of ${newId}: ${errorMessage(error)}`);
         }
       }
       const result = {
         changed: Object.values(replaced),
         replacedSlideIds: replaced,
         verified: { notesMatch: verified },
-        warnings: [
-          "Slides were re-inserted to edit notes: old slide IDs are gone (see replacedSlideIds).",
-        ],
+        warnings,
         ...(failed.length > 0 && { failed }),
       };
       return { ...jsonResult(result), ...(failed.length === notes.length && { isError: true }) };
@@ -197,62 +250,59 @@ export function createAdvancedTools(
       "Insert a native, editable PowerPoint chart (bar, column, line, pie, doughnut, area, scatter). " +
       "With slideId, the chart is added to that existing slide; everything already on it is kept, but the slide is " +
       "re-inserted and gets a new ID (returned). For a chart on a new slide that uses a deck layout, add_slide first, then " +
-      "call this with its slideId; omitting slideId inserts a blank slide holding only the chart. " +
+      "call this with its slideId; omitting slideId inserts a blank slide holding only the chart, at position (default: the end). " +
       "Bounds are in points. Pass theme colors and fonts so the chart matches the deck. Edit the chart's data later by calling again " +
       "and deleting the old chart shape.",
     parameters: chartParameters,
     describeCall: ({ type, slideId, title }: { type: string; slideId?: string; title?: string }) =>
       `Insert ${type} chart${title ? ` "${title}"` : ""} ${slideId ? `on ${slideLabel(positions, slideId)}` : "on a new slide"}`,
     async execute(_id, { slideId, position, bounds, ...chart }) {
-      const boundsFor = (size: SlideSize) =>
-        bounds ?? {
+      const specFor = (size: SlideSize): ChartSpec => ({
+        ...chart,
+        bounds: bounds ?? {
           left: size.width * 0.075,
           top: size.height * 0.22,
           width: size.width * 0.85,
           height: size.height * 0.7,
-        };
+        },
+      });
 
       validateChartSpec(chart);
 
-      if (slideId) {
-        await deps.beforeWrite([slideId]);
-        const exported = await exportSlide(slideId);
-        const size = await readSlideSize(await loadPptx(exported));
-        const spec: ChartSpec = { ...chart, bounds: boundsFor(size) };
-        const merged = await mergeChartIntoSlide(exported, await buildChartPptx(spec, size));
-        const { slideId: newId, shapes } = await replaceSlide({ slideId, base64: merged });
-        await deps.afterWrite({ createdSlideIds: [newId] });
-        const chartShape = shapes.find(
-          (s) => s.type === "Chart" && s.name === chartShapeName(spec),
+      if (!slideId) {
+        const deck = await host.call<DeckInfo>("get_deck");
+        const size = await deckSlideSize(deck);
+        return insertPackage(
+          await buildChartPptx(specFor(size), size),
+          "UseDestinationTheme",
+          insertAfter(deck, position),
         );
-        return jsonResult({
-          changed: [newId],
-          replacedSlideIds: { [slideId]: newId },
-          verified: { chartShapeId: chartShape?.id ?? null, shapeCount: shapes.length },
-          warnings: [
-            `Slide ${slideId} was re-inserted with the chart and is now ${newId}.`,
-            ...(chartShape
-              ? []
-              : ["Chart shape not found on the re-inserted slide; call get_slide to check."]),
-          ],
-        });
       }
 
-      const deck = await host.call<DeckInfo>("get_deck");
-      const size = await deckSlideSize(deck);
-      const spec: ChartSpec = { ...chart, bounds: boundsFor(size) };
-      const targetSlideId = insertAfter(deck, position);
-      const receipt = await insertSlides({
-        base64: await buildChartPptx(spec, size),
-        formatting: "UseDestinationTheme",
-        ...(targetSlideId && { targetSlideId }),
-      });
-      const createdSlideIds = receipt.createdSlideIds ?? [];
-      await deps.afterWrite({ createdSlideIds });
+      await deps.beforeWrite([slideId]);
+      let replaced: ReplaceSlideResult;
+      try {
+        replaced = await editSlidePackage(slideId, async (exported) => {
+          const size = await readSlideSize(await loadPptx(exported));
+          return mergeChartIntoSlide(exported, await buildChartPptx(specFor(size), size));
+        });
+      } catch (error) {
+        if (isOutcomeUnknown(error)) return textResult(outcomeUnknownMessage(error));
+        throw error;
+      }
+      const { slideId: newId, shapes, warnings } = replaced;
+      const chartShape = shapes.find((s) => s.type === "Chart" && s.name === chartShapeName(chart));
       return jsonResult({
-        changed: createdSlideIds,
-        verified: receipt.verified,
-        warnings: receipt.warnings,
+        changed: [newId],
+        replacedSlideIds: { [slideId]: newId },
+        verified: { chartShapeId: chartShape?.id ?? null, shapeCount: shapes.length },
+        warnings: [
+          `Slide ${slideId} was re-inserted with the chart and is now ${newId}.`,
+          ...warnings,
+          ...(chartShape || shapes.length === 0
+            ? []
+            : ["Chart shape not found on the re-inserted slide; call get_slide to check."]),
+        ],
       });
     },
   });
@@ -262,9 +312,9 @@ export function createAdvancedTools(
     label: "Insert slides from file",
     access: "write",
     description:
-      "Copy slides from an attached .pptx into this deck. Choose slides by their 1-based numbers in the attachment " +
-      "(see the attachment's slide list via read_attachment). By default the slides adopt this deck's theme; set " +
-      "keepSourceFormatting to keep their original look.",
+      "Copy slides from an attached .pptx into this deck at position (default: the end). Choose slides by their 1-based " +
+      "numbers in the attachment (see the attachment's slide list via read_attachment). By default the slides adopt this " +
+      "deck's theme; set keepSourceFormatting to keep their original look.",
     parameters: Type.Object({
       attachmentId: Type.String(),
       slides: Type.Optional(
@@ -273,7 +323,7 @@ export function createAdvancedTools(
           description: "1-based slide numbers in the file. Omit for all.",
         }),
       ),
-      position,
+      position: Type.Optional(Position),
       keepSourceFormatting: Type.Optional(Type.Boolean()),
     }),
     describeCall: ({ slides }: { slides?: number[] }) =>
@@ -290,19 +340,11 @@ export function createAdvancedTools(
         );
       }
       const deck = await host.call<DeckInfo>("get_deck");
-      const targetSlideId = insertAfter(deck, position);
-      const receipt = await insertSlides({
-        base64: slides ? await keepSlides(attachment.base64, slides) : attachment.base64,
-        formatting: keepSourceFormatting ? "KeepSourceFormatting" : "UseDestinationTheme",
-        ...(targetSlideId && { targetSlideId }),
-      });
-      const createdSlideIds = receipt.createdSlideIds ?? [];
-      await deps.afterWrite({ createdSlideIds });
-      return jsonResult({
-        changed: createdSlideIds,
-        verified: receipt.verified,
-        warnings: receipt.warnings,
-      });
+      return insertPackage(
+        slides ? await keepSlides(attachment.base64, slides) : attachment.base64,
+        keepSourceFormatting ? "KeepSourceFormatting" : "UseDestinationTheme",
+        insertAfter(deck, position),
+      );
     },
   });
 

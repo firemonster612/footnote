@@ -2,7 +2,7 @@ import type { ImageContent, TextContent } from "@earendil-works/pi-ai";
 import { Type, type Static } from "typebox";
 import type { FootnoteTool, ProcessedAttachment, ToolEnv } from "../contracts.ts";
 import { base64ToBytes } from "./base64.ts";
-import { defineTool } from "./define-tool.ts";
+import { defineTool } from "../tools/defineTool.ts";
 import type { AttachmentImage } from "./extracted-content.ts";
 
 const DEFAULT_LIMIT = 12_000;

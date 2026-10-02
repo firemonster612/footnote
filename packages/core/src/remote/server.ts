@@ -1,7 +1,7 @@
 // Serves a FootnoteApp over a port: pushes settings, host status and session state, and runs the view's calls.
 
 import { base64ToBytes } from "../attachments/base64.ts";
-import type { AgentMessage, ChatSession, FootnoteApp, OfficeCallOptions } from "../contracts.ts";
+import type { AgentMessage, ChatSession, FootnoteApp } from "../contracts.ts";
 import type {
   AppMethod,
   CallMessage,
@@ -12,11 +12,19 @@ import type {
 } from "./protocol.ts";
 
 interface WatchedChat {
+  chatId: string;
   session: ChatSession;
   /** The messages the view has, by identity; updates send only what changed after them. */
   sent: AgentMessage[];
+  lastPushAt: number;
+  /** A push waiting out the throttle. */
+  pendingPush?: ReturnType<typeof setTimeout>;
   unsubscribe(): void;
 }
+
+/** Streaming changes state on every delta; pushing at most this often keeps the port from flooding. The first
+ * change after a quiet spell goes out at once, so the view sees a run start without delay. */
+const PUSH_INTERVAL_MS = 50;
 
 /** Serves `app` to the view on the other end of `port` until the port disconnects. */
 export async function serveFootnoteApp(app: FootnoteApp, port: ServerPort): Promise<void> {
@@ -36,34 +44,50 @@ export async function serveFootnoteApp(app: FootnoteApp, port: ServerPort): Prom
   port.onDisconnect.addListener(() => {
     connected = false;
     for (const unsubscribe of subscriptions) unsubscribe();
-    for (const chat of watched.values()) chat.unsubscribe();
-    watched.clear();
+    for (const chatId of watched.keys()) unwatch(chatId);
   });
+
+  function push(chat: WatchedChat): void {
+    clearTimeout(chat.pendingPush);
+    chat.pendingPush = undefined;
+    chat.lastPushAt = Date.now();
+    const { messages, ...state } = chat.session.getState();
+    const changed = messages.findIndex((message, index) => message !== chat.sent[index]);
+    const start = changed === -1 ? messages.length : changed;
+    chat.sent = messages;
+    post({
+      type: "session",
+      chatId: chat.chatId,
+      update: { ...state, messages: { start, items: messages.slice(start) } },
+    });
+  }
+
+  /** Sends throttled state now, so a call's result never reaches the view before the state it produced. */
+  function flushPushes(): void {
+    for (const chat of watched.values()) if (chat.pendingPush !== undefined) push(chat);
+  }
 
   /** Starts pushing a session's state to the view, beginning with all of it. */
   function watch(session: ChatSession): string {
     const chatId = session.getState().id;
     if (watched.has(chatId)) return chatId;
-    const chat: WatchedChat = { session, sent: [], unsubscribe: () => {} };
-    const push = () => {
-      const { messages, ...state } = session.getState();
-      const changed = messages.findIndex((message, index) => message !== chat.sent[index]);
-      const start = changed === -1 ? messages.length : changed;
-      chat.sent = messages;
-      post({
-        type: "session",
-        chatId,
-        update: { ...state, messages: { start, items: messages.slice(start) } },
-      });
-    };
-    chat.unsubscribe = session.subscribe(push);
+    const chat: WatchedChat = { chatId, session, sent: [], lastPushAt: 0, unsubscribe: () => {} };
+    chat.unsubscribe = session.subscribe(() => {
+      if (chat.pendingPush !== undefined) return;
+      const wait = chat.lastPushAt + PUSH_INTERVAL_MS - Date.now();
+      if (wait <= 0) push(chat);
+      else chat.pendingPush = setTimeout(() => push(chat), wait);
+    });
     watched.set(chatId, chat);
-    push();
+    push(chat);
     return chatId;
   }
 
   function unwatch(chatId: string): void {
-    watched.get(chatId)?.unsubscribe();
+    const chat = watched.get(chatId);
+    if (!chat) return;
+    chat.unsubscribe();
+    clearTimeout(chat.pendingPush);
     watched.delete(chatId);
   }
 
@@ -77,9 +101,6 @@ export async function serveFootnoteApp(app: FootnoteApp, port: ServerPort): Prom
       unwatch(chatId);
       return app.chats.delete(chatId);
     },
-    "host.call": (op: string, args: unknown, options?: OfficeCallOptions) =>
-      app.host.call(op, args, options),
-    "host.runCode": (code: string, options?: OfficeCallOptions) => app.host.runCode(code, options),
   };
 
   function callSession(chatId: string, method: SessionMethod, args: unknown[]): unknown {
@@ -100,14 +121,19 @@ export async function serveFootnoteApp(app: FootnoteApp, port: ServerPort): Prom
 
   port.onMessage.addListener((call) => {
     run(call).then(
-      (value) => post({ type: "result", id: call.id, ok: true, value }),
-      (error: unknown) =>
+      (value) => {
+        flushPushes();
+        post({ type: "result", id: call.id, ok: true, value });
+      },
+      (error: unknown) => {
+        flushPushes();
         post({
           type: "result",
           id: call.id,
           ok: false,
           error: error instanceof Error ? error.message : String(error),
-        }),
+        });
+      },
     );
   });
 

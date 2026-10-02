@@ -1,6 +1,6 @@
 import type { TextContent } from "@earendil-works/pi-ai";
 import { Type } from "typebox";
-import { defineTool } from "../attachments/define-tool.ts";
+import { defineTool } from "../tools/defineTool.ts";
 import type { FootnoteTool, ToolEnv } from "../contracts.ts";
 
 const FIRECRAWL_API = "https://api.firecrawl.dev/v2";

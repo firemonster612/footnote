@@ -100,12 +100,18 @@ export function HistoryView({
   );
 }
 
-function formatAge(timestamp: number): string {
-  const days = Math.round((timestamp - Date.now()) / dayMs);
+/** Today's chats show their time; older ones count calendar days ("yesterday" means the previous date). */
+export function formatAge(timestamp: number): string {
+  const days = Math.round((startOfDay(new Date(timestamp)) - startOfDay(new Date())) / dayMs);
   if (days === 0)
     return new Date(timestamp).toLocaleTimeString(undefined, {
       hour: "numeric",
       minute: "2-digit",
     });
   return relativeTime.format(days, "day");
+}
+
+// Rounding the difference absorbs the 23- and 25-hour days around DST changes.
+function startOfDay(date: Date): number {
+  return new Date(date.getFullYear(), date.getMonth(), date.getDate()).getTime();
 }

@@ -10,11 +10,11 @@
     "typecheck": "tsc -p ."
   },
   "dependencies": {
+    "@earendil-works/pi-agent-core": "1.0.0",
     "@footnote/core": "workspace:*",
-    "typebox": "^1.3.34",
-    "pptxgenjs": "^4.0.1",
     "jszip": "^3.10.2",
-    "@earendil-works/pi-agent-core": "1.0.0"
+    "pptxgenjs": "^4.0.1",
+    "typebox": "^1.3.34"
   },
   "devDependencies": {
     "@types/office-js": "^1.0.610"

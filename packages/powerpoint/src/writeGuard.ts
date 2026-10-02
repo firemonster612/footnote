@@ -1,7 +1,7 @@
 import { type OfficeHost, OfficeOpError } from "@footnote/core/contracts";
 import type { AdvancedToolDeps } from "./advanced/deps.ts";
 import { type ChatState, currentTurn, type Turn } from "./chats.ts";
-import { staleSlideMessage } from "./ops/guard.ts";
+import { NO_SNAPSHOT_WARNING, staleSlideMessage } from "./ops/guard.ts";
 import { slideNotFound } from "./ops/presentation.ts";
 import type { SlideState, WriteGuardArgs, WriteReceipt } from "./ops/types.ts";
 
@@ -11,8 +11,8 @@ export interface WriteGuard extends AdvancedToolDeps {
    * before changing anything) and the slides this turn hasn't snapshotted yet (the op exports them for undo).
    */
   writeArgs(slideIds: string[]): Required<WriteGuardArgs>;
-  /** Snapshot for undo without the freshness check (code runs). */
-  checkpoint(slideIds: string[]): Promise<void>;
+  /** Snapshot for undo without the freshness check (code runs). Returns a warning when the host can't snapshot. */
+  checkpoint(slideIds: string[]): Promise<string[]>;
   /** Applies a write op's receipt: snapshots and created slides join the turn, fingerprints become the model's view. */
   record(receipt: WriteReceipt): void;
   /** The model has read this slide at this fingerprint. */
@@ -29,12 +29,28 @@ export function modelFacingError(error: unknown): unknown {
     : error;
 }
 
+/** PowerPoint for the web applies large batches slowly; a 60 s cap reported real, still-landing edits as failures. */
+export const WRITE_TIMEOUT_MS = 300_000;
+
+/**
+ * The host stopped waiting (TimeoutError) or lost the bridge after sending the request (OutcomeUnknownError): the op
+ * may still have applied, so the model must re-read instead of retrying.
+ */
+export const isOutcomeUnknown = (error: unknown): error is Error =>
+  error instanceof Error && (error.name === "TimeoutError" || error.name === "OutcomeUnknownError");
+
+export const outcomeUnknownMessage = (error: Error): string =>
+  `Outcome unknown (${error.message}): the edit may have applied. Re-read with get_slide or get_deck before retrying; don't repeat the write blindly.`;
+
+export const errorMessage = (error: unknown): string =>
+  error instanceof Error ? error.message : String(error);
+
 const needsSnapshot = (turn: Turn, slideIds: string[]): string[] =>
   slideIds.filter((id) => !turn.snapshots.has(id) && !turn.created.has(id));
 
 /** Read-before-write and undo checkpoints for one chat. `chat` resolves lazily because the env-to-chat binding can arrive after tool creation. */
 export function createWriteGuard(host: OfficeHost, chat: () => ChatState): WriteGuard {
-  async function prepare(slideIds: string[], checkFresh: boolean): Promise<void> {
+  async function prepare(slideIds: string[], checkFresh: boolean): Promise<string[]> {
     const state = chat();
     const turn = currentTurn(state);
     const exportSlideIds = needsSnapshot(turn, slideIds);
@@ -53,6 +69,8 @@ export function createWriteGuard(host: OfficeHost, chat: () => ChatState): Write
       const slide = slides[id];
       if (slide?.base64) turn.snapshots.set(id, { index: slide.index, base64: slide.base64 });
     }
+    // get_slide_states skips exports without PowerPointApi 1.8.
+    return exportSlideIds.some((id) => !slides[id]?.base64) ? [NO_SNAPSHOT_WARNING] : [];
   }
 
   function recordFingerprints(fingerprints: Record<string, string>): void {
@@ -65,7 +83,9 @@ export function createWriteGuard(host: OfficeHost, chat: () => ChatState): Write
   }
 
   return {
-    beforeWrite: (slideIds) => prepare(slideIds, true),
+    async beforeWrite(slideIds) {
+      await prepare(slideIds, true);
+    },
     checkpoint: (slideIds) => prepare(slideIds, false),
 
     writeArgs(slideIds) {
@@ -95,11 +115,20 @@ export function createWriteGuard(host: OfficeHost, chat: () => ChatState): Write
       const turn = currentTurn(chat());
       for (const id of createdSlideIds) turn.created.add(id);
       const slideIds = [...createdSlideIds, ...changedSlideIds];
-      if (slideIds.length === 0) return;
-      const slides = await host.call<Record<string, SlideState>>("get_slide_states", { slideIds });
-      recordFingerprints(
-        Object.fromEntries(Object.entries(slides).map(([id, slide]) => [id, slide.fingerprint])),
-      );
+      if (slideIds.length === 0) return [];
+      try {
+        const slides = await host.call<Record<string, SlideState>>("get_slide_states", {
+          slideIds,
+        });
+        recordFingerprints(
+          Object.fromEntries(Object.entries(slides).map(([id, slide]) => [id, slide.fingerprint])),
+        );
+        return [];
+      } catch (error) {
+        return [
+          `The change was made, but reading the slides afterwards failed (${errorMessage(error)}). Call get_slide before editing them again; don't repeat the change.`,
+        ];
+      }
     },
 
     observe(slideId, fingerprint) {

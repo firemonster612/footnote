@@ -18,12 +18,12 @@ import {
   type CodeBody,
 } from "@footnote/shell-kit/realm";
 
-/** Chat history key for documents without a URL (never saved). They share one history. */
-const UNSAVED_DOCUMENT_ID = "unsaved-document";
-
 export function createTaskPaneHost(hostModule: HostModule): OfficeHost {
+  // Chat history key while the document has no URL (never saved). The pane belongs to one document, so this
+  // keeps its chats apart from other unsaved decks; once saved, the URL takes over.
+  const unsavedDocumentId = `unsaved-${crypto.randomUUID()}`;
   return {
-    status: async () => statusFromInfo(readOfficeInfo(), hostModule.kind, UNSAVED_DOCUMENT_ID),
+    status: async () => statusFromInfo(readOfficeInfo(), hostModule.kind, unsavedDocumentId),
     // The task pane lives and dies with its document, so there are no status changes to report.
     onStatusChange: () => () => {},
     call: async (op, args, options) =>
