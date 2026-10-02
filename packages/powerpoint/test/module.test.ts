@@ -197,6 +197,28 @@ describe("powerpointModule", () => {
     expect(module.undo.canUndo("chat")).toBe(false);
   });
 
+  it("undo removes slides a code run created", async () => {
+    const module = createPowerPointModule();
+    const { env, fingerprints, calls } = fakeEnv(["s1"]);
+    env.host.runCode = async () => {
+      fingerprints.set("code-new", "c1");
+      return { ok: true, logs: [], slides: { before: ["s1"], after: ["s1", "code-new"] } };
+    };
+    module.undo.beginTurn("chat", "t1");
+    const tools = module.createTools(env);
+    await module.getContextBlock(env, "chat");
+
+    const result = await tool(tools, "execute_office_js").execute("c1", {
+      code: "/* adds a slide */",
+      explanation: "Add a slide",
+    });
+    expect(JSON.stringify(result.content)).toContain("Created slides: code-new.");
+    expect(module.undo.canUndo("chat")).toBe(true);
+
+    await module.undo.undoLastTurn(env, "chat");
+    expect(calls.at(-1)?.args.deleteSlideIds).toEqual(["code-new"]);
+  });
+
   it("undo removes created slides and warns about edits made after the turn", async () => {
     const module = createPowerPointModule();
     const { env, fingerprints, calls } = fakeEnv(["s1"]);

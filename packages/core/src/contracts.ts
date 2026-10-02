@@ -43,6 +43,8 @@ export interface CodeRunResult {
   error?: OfficeErrorInfo;
   /** True when the run timed out or the bridge dropped: edits may or may not have applied. */
   outcomeUnknown?: boolean;
+  /** Slide IDs in deck order before and after the run, so code that adds slides can be undone. */
+  slides?: { before: string[]; after: string[] };
 }
 
 export interface OfficeHost {
@@ -267,6 +269,8 @@ export interface ChatSessionState {
   queuedMessages: QueuedMessage[];
   /** Timestamps of user messages that started a turn; only these can be reverted to (steered messages can't). */
   revertibleRequests: number[];
+  /** Tool-card label per tool call ID, from the host's describeCall with the engine's own document state. */
+  toolCallLabels: Record<string, string>;
   canUndo: boolean;
   contextUsage?: { tokens: number; window: number };
   error?: string;

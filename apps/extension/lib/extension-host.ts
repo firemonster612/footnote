@@ -16,7 +16,13 @@ import {
   unwrapOpResponse,
   withDeadline,
 } from "@footnote/shell-kit/host";
-import { codeBodySource, type OfficeInfo, type OpResponse } from "@footnote/shell-kit/realm";
+import {
+  codeBodySource,
+  codeLineOffsets,
+  withSourceUrl,
+  type OfficeInfo,
+  type OpResponse,
+} from "@footnote/shell-kit/realm";
 import {
   BRIDGE_READY_MESSAGE,
   INFO_OP,
@@ -214,7 +220,9 @@ export function createExtensionHost(kind: OfficeHostKind, tabId: number): Office
           "executeUserScript",
           tabId,
           target.frameId,
-          `globalThis.${REALM_GLOBAL}.runCode(${codeBodySource(code)})`,
+          withSourceUrl(
+            `globalThis.${REALM_GLOBAL}.runCode(${codeBodySource(code)}, ${JSON.stringify({ code, lineOffset: codeLineOffsets.script })})`,
+          ),
         );
         const startedAt = performance.now();
         const [injection] = await withDeadline(execution, "The code run", options);

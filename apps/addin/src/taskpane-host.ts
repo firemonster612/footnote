@@ -12,6 +12,8 @@ import {
   codeBodySource,
   readOfficeInfo,
   runCodeBody,
+  codeLineOffsets,
+  withSourceUrl,
   toErrorInfo,
   type CodeBody,
 } from "@footnote/shell-kit/realm";
@@ -32,12 +34,16 @@ export function createTaskPaneHost(hostModule: HostModule): OfficeHost {
     async runCode(code, options): Promise<CodeRunResult> {
       let body: CodeBody;
       try {
-        body = new Function(`return ${codeBodySource(code)}`)();
+        body = new Function(withSourceUrl(`return ${codeBodySource(code)}`))();
       } catch (error) {
         return { ok: false, logs: [], error: toErrorInfo(error) };
       }
       try {
-        return await withDeadline(runCodeBody(body), "The code run", options);
+        return await withDeadline(
+          runCodeBody(body, { code, lineOffset: codeLineOffsets.newFunction }),
+          "The code run",
+          options,
+        );
       } catch (error) {
         return unknownOutcome(error);
       }

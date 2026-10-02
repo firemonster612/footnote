@@ -58,11 +58,14 @@ function humanizeToolName(name: string): string {
 export function ToolCard({
   call,
   tool,
+  label: describedLabel,
   result,
   status,
 }: {
   call: ToolCall;
   tool: FootnoteTool | undefined;
+  /** From the engine, which knows the deck; preferred over describing the call here. */
+  label?: string;
   result: ToolResultMessage | undefined;
   status: ToolCallStatus;
 }) {
@@ -77,7 +80,9 @@ export function ToolCard({
     <Collapsible className="overflow-hidden rounded-md border">
       <CollapsibleTrigger className="group flex h-8 w-full cursor-default items-center gap-2 px-2 text-left text-small transition-colors duration-100 select-none hover:bg-highlight focus-visible:outline-offset-[-2px]">
         <StatusIcon size={14} className={cn("shrink-0", className)} aria-label={label} />
-        <span className="min-w-0 flex-1 truncate">{describeToolCall(call, tool)}</span>
+        <span className="min-w-0 flex-1 truncate">
+          {describedLabel ?? describeToolCall(call, tool)}
+        </span>
         <ChevronRight size={14} className={cn(disclosureChevron, "text-subtle-foreground")} />
       </CollapsibleTrigger>
       {images.length > 0 && (

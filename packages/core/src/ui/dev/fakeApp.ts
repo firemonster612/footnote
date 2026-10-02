@@ -457,6 +457,7 @@ function emptyState(id: string, settings: Settings): ChatSessionState {
     stagedAttachments: [],
     queuedMessages: [],
     revertibleRequests: [],
+    toolCallLabels: {},
     canUndo: false,
   };
 }
@@ -592,6 +593,7 @@ function demoState(): ChatSessionState {
     id: "chat-demo",
     title: "Tighten slide 3",
     messages,
+    toolCallLabels: {},
     revertibleRequests: messages.flatMap((message) =>
       message.role === "user" ? [message.timestamp] : [],
     ),

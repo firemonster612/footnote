@@ -55,6 +55,8 @@ Batch so the edits land together (every \`context.sync()\` is a round trip and a
 3. \`await context.sync()\` once at the end.
 Split into more syncs only when a later step needs a value from an earlier write (e.g. the ID of a shape you just added). Never sync inside a loop over slides or shapes.
 
+Keep each run small: about 150 lines at most. Writing a long script takes the model minutes before anything appears, and one mistake wastes all of it. For a deck-wide redesign, build one or two slides per run, render them, then continue; define shared helpers again in each run rather than relying on earlier ones. Before setting properties on a shape you looked up (\`find\`, by name), check it exists and throw a clear error if it doesn't.
+
 PowerPoint for the web rules (breaking them fails the run):
 - Batches aren't transactional: when a sync fails, everything queued before the failing statement may already be applied. After an error, read the slide (get_slide) before running again, and make scripts safe to rerun (prefixed shape names + \`footnote.removeShapes\`).
 - Never swallow sync errors (\`.catch(() => {})\`); a failed sync leaves the loaded values unusable and the next statements fail confusingly.
@@ -83,11 +85,40 @@ ${codeHelpersReference}`,
         timeoutMs: CODE_TIMEOUT_MS,
         ...(signal && { signal }),
       });
+      const slideChanges = run.slides && diffSlides(run.slides);
+      // Slides the code created join the turn, so undo and revert remove them.
+      if (slideChanges?.created.length)
+        await guard.afterWrite({ createdSlideIds: slideChanges.created });
       return {
-        content: [{ type: "text", text: formatCodeRun(run) }],
+        content: [
+          { type: "text", text: formatCodeRun(run) + formatSlideChanges(slideChanges, slideIds) },
+        ],
         details: run,
         ...(!run.ok && { isError: true }),
       };
     },
   });
+}
+
+function diffSlides({ before, after }: { before: string[]; after: string[] }) {
+  return {
+    created: after.filter((id) => !before.includes(id)),
+    deleted: before.filter((id) => !after.includes(id)),
+  };
+}
+
+function formatSlideChanges(
+  changes: ReturnType<typeof diffSlides> | undefined,
+  snapshotted: string[],
+): string {
+  if (!changes) return "";
+  const lines = [];
+  if (changes.created.length > 0) lines.push(`Created slides: ${changes.created.join(", ")}.`);
+  const unrecoverable = changes.deleted.filter((id) => !snapshotted.includes(id));
+  if (changes.deleted.length > 0) lines.push(`Deleted slides: ${changes.deleted.join(", ")}.`);
+  if (unrecoverable.length > 0)
+    lines.push(
+      `Undo can't bring back ${unrecoverable.join(", ")}: list slides in slideIds before deleting them in code.`,
+    );
+  return lines.length > 0 ? `\n${lines.join("\n")}` : "";
 }

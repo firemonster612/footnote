@@ -79,24 +79,73 @@ export async function callOp(ops: OpRegistry, op: string, args: unknown): Promis
 }
 
 /** Source of an async function expression that compiles to a `CodeBody`. */
+/** Names the model's code in stack traces, so errors can point at its line. */
+export const CODE_SOURCE_URL = "footnote-code.js";
+const sourceUrlComment = `\n//# sourceURL=${CODE_SOURCE_URL}`;
+
 export function codeBodySource(code: string): string {
   return `async (context, footnote, console) => {\n${code}\n}`;
 }
 
-export async function runCodeBody(body: CodeBody): Promise<CodeRunResult> {
+/** Where the model's first line lands in stack traces for each way of compiling the code. */
+export const codeLineOffsets = {
+  /** `${prefix}${codeBodySource(code)}…` evaluated as a script whose first line holds the arrow's opening. */
+  script: 1,
+  /** `new Function(\`return ${codeBodySource(code)}\`)`: V8 adds the `function anonymous(` header lines. */
+  newFunction: 3,
+};
+
+export function withSourceUrl(source: string): string {
+  return source + sourceUrlComment;
+}
+
+export interface CodeSource {
+  code: string;
+  lineOffset: number;
+}
+
+export async function runCodeBody(body: CodeBody, source?: CodeSource): Promise<CodeRunResult> {
   const logs: string[] = [];
   const log = (...values: unknown[]) => {
     logs.push(values.map(formatLogValue).join(" "));
   };
   const console = { log, info: log, warn: log, error: log };
+  let before: string[] | undefined;
+  let run: CodeRunResult;
   try {
-    const result = await PowerPoint.run((context) =>
-      body(context, createFootnoteHelpers(context), console),
-    );
-    return { ok: true, result: toJsonSafe(result), logs };
+    const result = await PowerPoint.run(async (context) => {
+      before = await slideIdsIn(context);
+      return body(context, createFootnoteHelpers(context), console);
+    });
+    run = { ok: true, result: toJsonSafe(result), logs };
   } catch (error) {
-    return { ok: false, logs, error: toErrorInfo(error) };
+    run = { ok: false, logs, error: withCodeLocation(toErrorInfo(error), error, source) };
   }
+  // A fresh batch: after a failed sync the run's context is unusable.
+  const after = await PowerPoint.run(slideIdsIn).catch(() => undefined);
+  return before && after ? { ...run, slides: { before, after } } : run;
+}
+
+async function slideIdsIn(context: PowerPoint.RequestContext): Promise<string[]> {
+  const slides = context.presentation.slides.load("items/id");
+  await context.sync();
+  return slides.items.map((slide) => slide.id);
+}
+
+/** "Cannot set properties of undefined" is useless without the line; quote the model's line that threw. */
+function withCodeLocation(
+  info: OfficeErrorInfo,
+  error: unknown,
+  source: CodeSource | undefined,
+): OfficeErrorInfo {
+  if (!source || !(error instanceof Error) || !error.stack) return info;
+  const match = new RegExp(`${CODE_SOURCE_URL.replace(".", "\\.")}:(\\d+):\\d+`).exec(error.stack);
+  if (!match) return info;
+  const lineNumber = Number(match[1]) - source.lineOffset;
+  const line = source.code.split("\n")[lineNumber - 1]?.trim();
+  if (!line) return info;
+  const quoted = line.length > 160 ? `${line.slice(0, 160)}…` : line;
+  return { ...info, message: `${info.message} (line ${lineNumber}: ${quoted})` };
 }
 
 export function toErrorInfo(error: unknown): OfficeErrorInfo {

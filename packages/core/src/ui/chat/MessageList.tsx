@@ -198,6 +198,9 @@ function AssistantMessageView({
                 key={part.id || index}
                 call={part}
                 tool={tools.get(part.name)}
+                {...(state.toolCallLabels[part.id] !== undefined && {
+                  label: state.toolCallLabels[part.id],
+                })}
                 result={result}
                 status={toolCallStatus(
                   part.id,

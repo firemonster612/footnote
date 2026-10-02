@@ -106,6 +106,9 @@ export function createChatSession({
   let error: string | undefined;
   let stagedIds: string[] = [];
   let queued: { id: string; text: string; attachmentIds: string[] }[] = [];
+  // Labels that resolved a slide position never change; ones that fell back to a raw ID are retried each time.
+  const settledLabels = new Map<string, string>();
+  const rawSlideId = /\d+#\d+/;
   // Chats saved before turn tracking: treat every request as a turn start. Their turn IDs are unknown to the
   // host, so reverting them reports that the slide changes can't be undone.
   let turnStarts =
@@ -184,6 +187,9 @@ export function createChatSession({
       thinkingLevel,
       stagedAttachments: attachmentMetas(stagedIds),
       revertibleRequests: turnStarts.map((start) => start.messageTimestamp),
+      toolCallLabels: toolCallLabels(
+        streamingMessage ? [...agent.state.messages, streamingMessage] : agent.state.messages,
+      ),
       queuedMessages: queued.map(({ id, text, attachmentIds }) => ({
         id,
         text,
@@ -196,6 +202,32 @@ export function createChatSession({
         }),
       ...(pendingError !== undefined && { error: pendingError }),
     };
+  }
+
+
+  function toolCallLabels(messages: AgentMessage[]): Record<string, string> {
+    const labels: Record<string, string> = {};
+    for (const message of messages) {
+      if (message.role !== "assistant") continue;
+      for (const part of message.content) {
+        if (part.type !== "toolCall") continue;
+        const settled = settledLabels.get(part.id);
+        if (settled) {
+          labels[part.id] = settled;
+          continue;
+        }
+        const tool = tools.find((candidate) => candidate.name === part.name);
+        if (!tool?.describeCall) continue;
+        try {
+          const label = tool.describeCall(part.arguments);
+          labels[part.id] = label;
+          if (!rawSlideId.test(label)) settledLabels.set(part.id, label);
+        } catch {
+          // Arguments of a call that is still streaming can be partial.
+        }
+      }
+    }
+    return labels;
   }
 
   function attachmentMetas(ids: string[]) {
